@@ -2423,7 +2423,11 @@ input[type="date"]::-webkit-calendar-picker-indicator {
   top: 0;
   left: 0;
   right: 0;
-  bottom: -28px;
+  /* How far the color + blur reach below the bar. Only this layer grows: the bar keeps its own
+     height (and .content-body's padding-top). The fades below are percentages, so they stretch
+     with it. */
+  --nav-backdrop-overhang: 72px;
+  bottom: calc(-1 * var(--nav-backdrop-overhang));
   z-index: -1;
   pointer-events: none;
   /* Color: one even fade from the very top (a bit darker than the old 0.72) to opacity 0 at the
@@ -3538,6 +3542,26 @@ input[type="date"]::-webkit-calendar-picker-indicator {
   visibility: hidden;
   transform: translateY(8px);
   transition: opacity 0.25s ease, transform 0.25s ease, visibility 0s linear 0.25s;
+}
+
+/* The top nav's backdrop (.landing-nav::before), mirrored: color and blur strongest at the bottom
+   edge, fading out upward past the footer. Only this layer reaches up; the footer keeps its own
+   height. */
+.landing-fixed-footer::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  --footer-backdrop-overhang: 72px;
+  top: calc(-1 * var(--footer-backdrop-overhang));
+  z-index: -1;
+  pointer-events: none;
+  background: linear-gradient(to top, rgba(6, 20, 27, 0.85) 0%, rgba(6, 20, 27, 0) 100%);
+  backdrop-filter: blur(var(--glass-blur));
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  -webkit-mask-image: linear-gradient(to top, #000 0%, #000 30%, transparent 100%);
+  mask-image: linear-gradient(to top, #000 0%, #000 30%, transparent 100%);
 }
 
 .landing-fixed-footer.is-visible {
@@ -5126,6 +5150,34 @@ body:has(.drawer-modal-overlay) .swal2-container.swal2-backdrop-show {
   }
 }
 
+/* Behind BottomNav on phones (layout.jsx): the launcher footer's backdrop (.landing-fixed-footer::before)
+   — color and blur strongest at the bottom edge, fading out upward. It covers the bar's own band
+   (--app-chrome-bottom) plus the same 72px overhang above it. z-index 20: under the bar (30) and
+   under the popups and their dim (.drawer-modal-overlay 21, popup 22), so a tall popup's lower
+   edge isn't blurred. */
+.bottom-nav-backdrop {
+  display: none;
+}
+
+@media only screen and (max-width: 767px) {
+  .bottom-nav-backdrop {
+    --bottom-nav-backdrop-overhang: 72px;
+    display: block;
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: calc(var(--app-chrome-bottom) + var(--bottom-nav-backdrop-overhang));
+    z-index: 20;
+    pointer-events: none;
+    background: linear-gradient(to top, rgba(6, 20, 27, 0.85) 0%, rgba(6, 20, 27, 0) 100%);
+    backdrop-filter: blur(var(--glass-blur));
+    -webkit-backdrop-filter: blur(var(--glass-blur));
+    -webkit-mask-image: linear-gradient(to top, #000 0%, #000 30%, transparent 100%);
+    mask-image: linear-gradient(to top, #000 0%, #000 30%, transparent 100%);
+  }
+}
+
 /* BottomNav.jsx: phone-only app navigation. A glass bar fixed to the bottom, the active role's two
    pages on either side and a raised round switch in the middle, all tinted by the active role
    (--role-accent from the role-* class on the bar). */
@@ -5146,11 +5198,13 @@ body:has(.drawer-modal-overlay) .swal2-container.swal2-backdrop-show {
     height: 64px;
     padding: 0 12px 8px;
     border-radius: 22px;
-    background: rgba(13, 22, 29, 0.82);
+    /* Same light glass as the popups (.drawer.drawer-modal): the dark fade behind it
+       (.bottom-nav-backdrop) already does the darkening, so the bar itself stays see-through. */
+    background: var(--glass-bg-light);
     backdrop-filter: blur(var(--glass-blur));
     -webkit-backdrop-filter: blur(var(--glass-blur));
     border: 1px solid var(--glass-border);
-    box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
   }
 
   .bottom-nav-side {

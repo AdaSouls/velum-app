@@ -38,6 +38,9 @@ const Layout = ({ children, activeMenu }) => {
         <div className="container">{children}</div>
       </div>
 
+      {/* Phone-only fade behind the bottom bar (theme-dark-glass.css). A sibling, not part of the
+          bar: the bar has its own backdrop-filter, so a blur nested inside it couldn't reach the page. */}
+      <div className="bottom-nav-backdrop" aria-hidden="true" />
       <BottomNav />
     </Fragment>
   );
