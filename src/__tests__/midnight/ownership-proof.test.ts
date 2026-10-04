@@ -15,6 +15,7 @@ const request = (overrides: Record<string, unknown>) => ({
   eventId: EVENT,
   fieldId: ZERO,
   setRoot: ZERO,
+  recipientPk: null,
   publishedBlock: 1,
   publishedTx: null,
   ...overrides,
@@ -45,6 +46,7 @@ describe('pickOwnershipRequest', () => {
         request({ setRoot: 'ee'.repeat(32) }),
         request({ eventId: 'ff'.repeat(32) }),
         request({ verifierPk: '99'.repeat(32) }),
+        request({ recipientPk: '77'.repeat(32) }),
       ],
       { eventIdHex: EVENT, organizerPkHex: ORGANIZER, myPkHex: ME },
     );
@@ -100,10 +102,11 @@ describe('proveOwnership', () => {
       choice: { source: 'new', requestId: null },
       onStep: (step) => steps.push(step),
     });
-    const [, eventId, fieldId, setRoot] = service.publishDisclosureRequest.mock.calls[0];
+    const [, eventId, fieldId, setRoot, recipient] = service.publishDisclosureRequest.mock.calls[0];
     expect(Buffer.from(eventId).toString('hex')).toBe(EVENT);
     expect(fieldId).toEqual(new Uint8Array(32));
     expect(setRoot).toEqual(new Uint8Array(32));
+    expect(recipient).toEqual(new Uint8Array(32)); // open: any holder of the event can answer
     expect(service.proveTokenOwnership).toHaveBeenCalledWith(returnedId, BigInt(3));
     expect(steps).toEqual(['publish', 'prove']);
     expect(result).toEqual({

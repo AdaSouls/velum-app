@@ -3,7 +3,8 @@
 // poap.compact starts with `disclosureRequests.member(requestId)` and then looks the request up,
 // so the transcript carries, in order:
 //   push <requestId> · member · … · idx [<requestId>] · popeq <request record>
-// where the record is { verifier, eventId, fieldId, setRoot }. proveTokenOwnership then checks
+// where the record is { verifier, eventId, fieldId, setRoot, recipient } (recipient added with
+// addressed requests, AdaSouls/velum f6f6114; a 4-field record is the earlier layout). proveTokenOwnership then checks
 // `tokenOwner.member(tokenId)`, a push of the 8-byte token id, the first one after the request.
 // These are values the circuit discloses on purpose (poap.compact's disclose()), nothing private.
 //
@@ -16,6 +17,7 @@ export type ProofDetails = {
   eventId: string; // hex
   fieldId: string; // hex, all-zero for a plain ownership/attendance request
   setRoot: string; // hex, all-zero for a plain request
+  recipientPk: string | null; // hex — the holder it was addressed to (and so who answered); null = open
   tokenId: bigint | null; // only proveTokenOwnership reveals it
 };
 
@@ -74,8 +76,10 @@ export function readProofDetails(program: any[]): ProofDetails | null {
       break;
     }
   }
-  if (!record || record.value?.length !== 4) return null;
-  const [verifier, eventId, fieldId, setRoot] = record.value;
+  const fieldCount = record?.value?.length;
+  if (!record || (fieldCount !== 4 && fieldCount !== 5)) return null;
+  const [verifier, eventId, fieldId, setRoot, recipient] = record.value;
+  const recipientHex = recipient === undefined ? ZERO_32 : toHex32(recipient);
 
   // 3. The token id (ownership proofs only): the first 8-byte push after the record, tested with member.
   let tokenId: bigint | null = null;
@@ -93,6 +97,7 @@ export function readProofDetails(program: any[]): ProofDetails | null {
     eventId: toHex32(eventId),
     fieldId: toHex32(fieldId),
     setRoot: toHex32(setRoot),
+    recipientPk: recipientHex === ZERO_32 ? null : recipientHex,
     tokenId,
   };
 }

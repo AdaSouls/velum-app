@@ -98,20 +98,27 @@ describe('loadCredentialPackage', () => {
 });
 
 describe('listAnswerableRequests', () => {
-  it('keeps plain and credential-field requests for this event, drops the rest', async () => {
+  it('keeps the requests this holder can answer for this event, drops the rest', async () => {
+    const ME = 'cc'.repeat(32);
+    const SOMEONE_ELSE = 'dd'.repeat(32);
     const setRoot = fakeRoot(['Campo', 'Platea']);
     (getAllDisclosureRequests as jest.Mock).mockResolvedValue([
       request({ requestId: 'plain' }),
-      request({ requestId: 'sector', fieldId: SECTOR, setRoot }),
-      request({ requestId: 'event-level', fieldId: '03'.repeat(32), setRoot: '44'.repeat(32) }),
+      request({ requestId: 'sector', fieldId: SECTOR, setRoot, recipientPk: ME }),
+      request({ requestId: 'plain-to-me', recipientPk: ME.toUpperCase() }),
+      request({ requestId: 'plain-to-other', recipientPk: SOMEONE_ELSE }),
+      request({ requestId: 'sector-open', fieldId: SECTOR, setRoot }),
+      request({ requestId: 'sector-to-other', fieldId: SECTOR, setRoot, recipientPk: SOMEONE_ELSE }),
+      request({ requestId: 'event-level', fieldId: '03'.repeat(32), setRoot: '44'.repeat(32), recipientPk: ME }),
       request({ requestId: 'other-event', eventId: 'ff'.repeat(32) }),
     ]);
     (fetchRequestRuleCandidates as jest.Mock).mockResolvedValue([oneOf('Bogus'), oneOf('Campo', 'Platea')]);
 
-    const items = await listAnswerableRequests(EVENT, [{ fieldId: SECTOR, label: 'Sector' }]);
+    const items = await listAnswerableRequests(EVENT, [{ fieldId: SECTOR, label: 'Sector' }], ME);
     expect(items.map((i) => [i.kind, i.request.requestId])).toEqual([
       ['attendance', 'plain'],
       ['attribute', 'sector'],
+      ['attendance', 'plain-to-me'],
     ]);
     expect(items[1]).toMatchObject({ label: 'Sector', rule: oneOf('Campo', 'Platea'), verified: true });
   });

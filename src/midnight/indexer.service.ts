@@ -105,6 +105,9 @@ export type IndexedDisclosureRequest = {
   eventId: string; // hex
   fieldId: string; // hex
   setRoot: string; // hex
+  // The holder pseudonym the request is addressed to; null = open (any holder of the event).
+  // Credential-attribute requests are always addressed (proveCredentialAttribute requires it).
+  recipientPk: string | null;
   publishedBlock: number | null;
   publishedTx: string | null;
 };

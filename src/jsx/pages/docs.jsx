@@ -323,7 +323,8 @@ const Docs = () => {
                   </li>
                   <li>
                     <strong>Ask for a Disclosure</strong> (Credential only): publish a yes/no question
-                    about a private field. Holders answer it without revealing the value:
+                    about a private field, addressed to one holder (paste the key they give you).
+                    Only that holder can answer, and they answer without revealing the value:
                     <ul>
                       <li>Text or list: "is one of …"</li>
                       <li>Number: at least, at most, between, or one of</li>
@@ -395,9 +396,11 @@ const Docs = () => {
                     from that event, without saying which one.
                   </li>
                   <li>
-                    <strong>Prove a Private Detail:</strong> answers an organizer's question, like
-                    "are you over 18?", without revealing the value, which credential it is, or your
-                    wallet. If your value doesn't qualify, the button is disabled.
+                    <strong>Prove a Private Detail:</strong> answers a question addressed to you,
+                    like "are you over 18?", without revealing the value or your wallet. Give the
+                    asker your key for questions (shown in the same popup) so they can address it to
+                    you; since the question names you, the asker knows the answer is yours. If your
+                    value doesn't qualify, the button is disabled.
                   </li>
                 </ul>
                 <p>

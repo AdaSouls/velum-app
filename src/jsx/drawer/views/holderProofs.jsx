@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { X, EyeOff, ShieldCheck, Users, Info } from "lucide-react";
+import { X, EyeOff, ShieldCheck, Users, Info, Copy, Check } from "lucide-react";
 import { useDrawer, useDrawerDispatch } from "../../contexts/drawer/drawer.provider";
 import { errorFunction, loadingFunction, succesfullBlockchainCreation } from "../../toasts/sweetAlerts";
 import {
@@ -71,8 +71,8 @@ const MODES = {
     kind: "attribute",
     title: "Prove a Private Detail",
     intro:
-      "Proves one of your credential's private details matches what was asked, without revealing the value, which credential is yours or your wallet. Each proof takes one signature.",
-    empty: "Nobody has asked a question about this credential's private details yet.",
+      "Proves one of your credential's private details matches what was asked, without revealing the value. Questions are addressed to you by name (your key below), so whoever asked knows the answer is yours. Each proof takes one signature.",
+    empty: "Nobody has asked you about this credential's private details yet.",
   },
 };
 
@@ -95,7 +95,7 @@ export default function HolderProofs() {
   useEffect(() => {
     if (!ctx || !service) return undefined;
     let cancelled = false;
-    listAnswerableRequests(ctx.token.eventId, ctx.credentialFields || [])
+    listAnswerableRequests(ctx.token.eventId, ctx.credentialFields || [], ctx.token.holderPk)
       .then((found) => {
         if (!cancelled) setItems(found.filter((item) => item.kind === mode.kind));
       })
@@ -143,7 +143,8 @@ export default function HolderProofs() {
         provenAt: new Date(),
       };
       setReceipt(record);
-      // Kept in this browser only: nothing on-chain links an anonymous proof back to the token.
+      // Kept in this browser only: nothing on-chain links an attendance proof back to the token (an
+      // attribute proof does name its holder, through the addressed request).
       addProofRecord(ctx.token.holderPk, ctx.token.tokenId, {
         ...record,
         txHash: txHash ?? null,
@@ -155,6 +156,20 @@ export default function HolderProofs() {
       errorFunction("Error", friendlyErrorMessage(error, "The proof failed. Please try again."), "");
     } finally {
       setBusyId(null);
+    }
+  };
+
+  // Questions about private details must name the holder who answers (poap.compact's
+  // proveCredentialAttribute), so whoever asks needs this key: the holder's pseudonym under this
+  // event's organizer, already public as their token's owner.
+  const [keyCopied, setKeyCopied] = useState(false);
+  const copyHolderKey = async () => {
+    try {
+      await navigator.clipboard.writeText(ctx.token.holderPk);
+      setKeyCopied(true);
+      setTimeout(() => setKeyCopied(false), 2000);
+    } catch (error) {
+      console.error("Copy failed:", error);
     }
   };
 
@@ -183,7 +198,28 @@ export default function HolderProofs() {
               <p>{mode.intro}</p>
             </div>
 
-            <AnonymityNote holders={holders} />
+            {mode.kind === "attribute" ? (
+              <div className="holder-proof-item">
+                <div style={{ minWidth: 0 }}>
+                  <p className="m-0 small font-weight-semibold">Your key for questions</p>
+                  <p className="m-0 small text-muted text-break" title={ctx.token.holderPk}>
+                    {ctx.token.holderPk}
+                  </p>
+                  <p className="m-0 small text-muted">Give it to whoever wants to ask you something.</p>
+                </div>
+                <button
+                  type="button"
+                  className="btn btn-card-detail-action btn-sm flex-shrink-0"
+                  onClick={copyHolderKey}
+                  aria-label="Copy your key"
+                >
+                  {keyCopied ? <Check size={14} className="mr-2" /> : <Copy size={14} className="mr-2" />}
+                  {keyCopied ? "Copied" : "Copy"}
+                </button>
+              </div>
+            ) : (
+              <AnonymityNote holders={holders} />
+            )}
 
             {loadError ? (
               <div className="alert alert-danger m-0" role="alert">

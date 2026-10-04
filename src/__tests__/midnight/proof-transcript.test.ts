@@ -25,7 +25,18 @@ const REQUEST = 'a2'.repeat(32);
 const VERIFIER = 'f0'.repeat(32);
 const EVENT = '4d'.repeat(32);
 
-function program({ tokenIdLe }: { tokenIdLe?: string } = {}) {
+const RECIPIENT = 'c3'.repeat(32);
+
+// Records written before addressed requests (AdaSouls/velum f6f6114) have 4 fields; now there's a
+// 5th, the recipient (all-zero = open request).
+function program({ tokenIdLe, recipient }: { tokenIdLe?: string; recipient?: string } = {}) {
+  const record =
+    recipient === undefined
+      ? { value: [bytes(VERIFIER), bytes(EVENT), bytes(''), bytes('')], alignment: [atom(32), atom(32), atom(32), atom(32)] }
+      : {
+          value: [bytes(VERIFIER), bytes(EVENT), bytes(''), bytes(''), bytes(recipient)],
+          alignment: [atom(32), atom(32), atom(32), atom(32), atom(32)],
+        };
   const ops: any[] = [
     { dup: { n: 0 } },
     ledgerField('0b'),
@@ -36,7 +47,7 @@ function program({ tokenIdLe }: { tokenIdLe?: string } = {}) {
     ledgerField('0b'),
     keyedBy(REQUEST),
     // Trailing zero bytes are dropped: an all-zero fieldId/setRoot is an empty atom.
-    { popeq: { cached: false, result: { value: [bytes(VERIFIER), bytes(EVENT), bytes(''), bytes('')], alignment: [atom(32), atom(32), atom(32), atom(32)] } } },
+    { popeq: { cached: false, result: record } },
   ];
   if (tokenIdLe !== undefined) ops.push({ dup: { n: 0 } }, cell(tokenIdLe, 8), 'member');
   return ops;
@@ -50,8 +61,17 @@ describe('readProofDetails', () => {
       eventId: EVENT,
       fieldId: '0'.repeat(64),
       setRoot: '0'.repeat(64),
+      recipientPk: null,
       tokenId: 0n,
     });
+  });
+
+  it('reads the recipient of an addressed request', () => {
+    expect(readProofDetails(program({ recipient: RECIPIENT }))?.recipientPk).toBe(RECIPIENT);
+  });
+
+  it('treats an all-zero recipient as an open request', () => {
+    expect(readProofDetails(program({ recipient: '' }))?.recipientPk).toBeNull();
   });
 
   it('reads the token id little-endian', () => {

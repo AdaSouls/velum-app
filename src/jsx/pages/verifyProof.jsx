@@ -247,6 +247,13 @@ export default function VerifyProof() {
                     <dd title={details.verifierPk}>
                       {askedByOrganizer ? "The event's organizer" : `Someone else (${truncateHex(details.verifierPk)})`}
                     </dd>
+                    {details.recipientPk && (
+                      <>
+                        {/* An addressed request can only be answered by the holder it names. */}
+                        <dt>Answered by</dt>
+                        <dd title={details.recipientPk}>The holder it was addressed to ({truncateHex(details.recipientPk)})</dd>
+                      </>
+                    )}
                   </>
                 )}
                 <dt>When</dt>

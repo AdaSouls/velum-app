@@ -67,6 +67,16 @@ describe('HolderProofs drawer view', () => {
     expect(await screen.findByText(/hasn't enabled proofs on this event yet/i)).toBeInTheDocument();
   });
 
+  it('shows the holder their key for addressed questions, and lists only those addressed to them', async () => {
+    listAnswerableRequests.mockResolvedValue([]);
+    renderView('detail');
+    expect(await screen.findByText(/nobody has asked you/i)).toBeInTheDocument();
+    expect(screen.getByText(TOKEN.holderPk)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /copy your key/i })).toBeInTheDocument();
+    expect(screen.queryByText(/anonymous among/i)).not.toBeInTheDocument();
+    expect(listAnswerableRequests).toHaveBeenCalledWith(TOKEN.eventId, [{ fieldId: SECTOR, label: 'Sector' }], TOKEN.holderPk);
+  });
+
   it('shows only the questions of its own mode', async () => {
     listAnswerableRequests.mockResolvedValue([
       { kind: 'attendance', request: request('11'.repeat(32)) },

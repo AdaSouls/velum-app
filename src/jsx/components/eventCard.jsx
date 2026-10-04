@@ -175,7 +175,8 @@ const EventCard = forwardRef(({
   // Open to any connected wallet, not just this event's own organizer — poap.compact's
   // publishDisclosureRequest has no organizer/admin gate (see docs/selective-disclosure-ui-design.md).
   // Only Credential events with private fields (createEvent.jsx → credentialAttributeFields) show
-  // it: each HOLDER answers, anonymously, from their POAP (holderProofs.jsx). Event-level private
+  // it: the one holder the request is addressed to answers from their POAP (holderProofs.jsx),
+  // without revealing the value. Event-level private
   // attributes were removed 2026-09-24 (same value for every holder, so a question about them said
   // nothing about the person).
   const privateAttributeFields = metadata?.credentialAttributeFields || [];

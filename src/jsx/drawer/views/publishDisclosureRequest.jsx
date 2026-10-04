@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { X } from "lucide-react";
 import {
   useDrawer,
@@ -11,7 +11,10 @@ import {
 } from "../../toasts/sweetAlerts";
 import { encodeAttributeValue } from "../../../midnight/attribute-value-codec";
 import { buildMerkleTree } from "../../../midnight/merkle";
-import { getDisclosureRequestsByVerifier } from "../../../midnight/indexer.service";
+import { getDisclosureRequestsByVerifier, getTokensByEvent } from "../../../midnight/indexer.service";
+import { requestRecipient } from "../../../midnight/ownership-proof";
+import { parseHolderCode } from "../../../midnight/credential-crypto";
+import { holderCodeFromInput } from "../../../midnight/invite-links";
 import { publishRequestRule } from "../../../midnight/disclosure-sets";
 import { describeRule, expandRule, ruleSize } from "../../../midnight/attribute-types";
 import QuestionBuilder from "../../components/QuestionBuilder";
@@ -26,14 +29,15 @@ const REQUEST_ID_POLL_DELAY_MS = 1500;
 // computeEventId) or trust out of the tx result (this codebase's established convention — see
 // contract.service.ts's own comment near computeEventId). So: poll the indexer for OUR OWN just-
 // published request, matching on the (eventId, fieldId, setRoot) we already know client-side.
-async function pollForRequestId({ verifierPkHex, eventIdHex, fieldIdHex, setRootHex }) {
+async function pollForRequestId({ verifierPkHex, eventIdHex, fieldIdHex, setRootHex, recipientPkHex }) {
   for (let attempt = 0; attempt < REQUEST_ID_POLL_ATTEMPTS; attempt++) {
     const requests = await getDisclosureRequestsByVerifier(verifierPkHex);
     const match = requests.find(
       (request) =>
         request.eventId === eventIdHex &&
         request.fieldId === fieldIdHex &&
-        request.setRoot === setRootHex,
+        request.setRoot === setRootHex &&
+        requestRecipient(request) === recipientPkHex,
     );
     if (match) return match.requestId;
     await new Promise((resolve) => setTimeout(resolve, REQUEST_ID_POLL_DELAY_MS));
@@ -48,6 +52,11 @@ async function pollForRequestId({ verifierPkHex, eventIdHex, fieldIdHex, setRoot
 // accepted values, or a number/date range. Holders answer from their POAP card (holderProofs.jsx),
 // so the question's rule is published for them (publishRequestRule); the chain only keeps the root
 // of the set it expands to.
+//
+// Every request is addressed to ONE holder (publishDisclosureRequest's `recipient`): their key for
+// this event's organizer, which they copy from Prove a Private Detail on their POAP. The contract
+// rejects proveCredentialAttribute on an open request and lets only the recipient answer, so a
+// classmate can't answer in the applicant's place (AdaSouls/velum f6f6114).
 export default function PublishDisclosureRequest() {
   const { midnight, disclosureEvent } = useDrawer();
   const dispatch = useDrawerDispatch();
@@ -58,6 +67,25 @@ export default function PublishDisclosureRequest() {
   const [ruleProblem, setRuleProblem] = useState(null);
   const [loading, setLoading] = useState(false);
   const [published, setPublished] = useState(null); // the question text, once published
+  const [recipientInput, setRecipientInput] = useState("");
+  const recipient = parseHolderCode(recipientInput);
+  const recipientPkHex = recipient?.holderPkHex || null;
+  // Informative only: whether that key holds a live POAP of this event right now. A request can be
+  // published before the credential is issued; the holder just can't answer until then.
+  const [recipientHolds, setRecipientHolds] = useState(null);
+  useEffect(() => {
+    setRecipientHolds(null);
+    if (!recipientPkHex || !disclosureEvent?.eventId) return undefined;
+    let cancelled = false;
+    getTokensByEvent(disclosureEvent.eventId, { includeBurned: false })
+      .then((tokens) => {
+        if (!cancelled) setRecipientHolds(tokens.some((token) => token.ownerPk?.toLowerCase() === recipientPkHex));
+      })
+      .catch((error) => console.error("Error checking the holder's key:", error));
+    return () => {
+      cancelled = true;
+    };
+  }, [recipientPkHex, disclosureEvent?.eventId]);
   const selectedField = fields.find((field) => field.fieldId === fieldId);
   const onQuestionChange = useCallback((nextRule, problem) => {
     setRule(nextRule);
@@ -72,6 +100,10 @@ export default function PublishDisclosureRequest() {
     e.preventDefault();
     if (!midnight?.provider || !disclosureEvent?.eventId || !fieldId) return;
 
+    if (!recipientPkHex) {
+      errorFunction("Validation Error", "Paste the key of the holder this question is for.", "");
+      return;
+    }
     if (!rule) {
       errorFunction("Validation Error", ruleProblem || "Complete the question first.", "");
       return;
@@ -97,6 +129,7 @@ export default function PublishDisclosureRequest() {
         eventIdBytes,
         fieldIdBytes,
         tree.rootBytes,
+        Uint8Array.from(Buffer.from(recipientPkHex, "hex")),
       );
 
       // The circuit returns the requestId (private.result); the indexer poll stays as a fallback.
@@ -109,6 +142,7 @@ export default function PublishDisclosureRequest() {
           eventIdHex: disclosureEvent.eventId,
           fieldIdHex: fieldId,
           setRootHex,
+          recipientPkHex,
         });
       }
       if (!requestId) {
@@ -128,7 +162,7 @@ export default function PublishDisclosureRequest() {
       setPublished(describeRule(selectedField?.label || "Value", rule));
       succesfullBlockchainCreation(
         "Disclosure Request Published",
-        "Holders can now answer it from their POAP (Prove a Private Detail).",
+        "The holder can now answer it from their POAP (Prove a Private Detail).",
         "",
       );
     } catch (error) {
@@ -160,6 +194,32 @@ export default function PublishDisclosureRequest() {
         ) : (
           <form className="row g-3" onSubmit={handlePublish}>
             <div className="col-12">
+              <label className="form-label" htmlFor="disclosureRecipient">Holder's Key</label>
+              <input
+                type="text"
+                className="form-control"
+                placeholder="The key the holder gave you"
+                id="disclosureRecipient"
+                name="disclosureRecipient"
+                value={recipientInput}
+                onChange={(event) => setRecipientInput(holderCodeFromInput(event.target.value))}
+                required
+              />
+              {recipientInput.trim() && !recipient && (
+                <small className="form-text text-danger d-block">That doesn't look like a holder's key.</small>
+              )}
+              {recipientHolds === false && (
+                <small className="form-text text-warning d-block">
+                  This key holds no POAP of this event right now, so it can't answer until it gets one.
+                </small>
+              )}
+              <small className="form-text text-muted">
+                Only this holder will be able to answer. They find their key on their POAP, under Prove
+                a Private Detail. Not their wallet address.
+              </small>
+            </div>
+
+            <div className="col-12">
               <label className="form-label" htmlFor="disclosureField">Attribute</label>
               <SelectDropdown
                 id="disclosureField"
@@ -174,8 +234,8 @@ export default function PublishDisclosureRequest() {
             {published && (
               <div className="col-12 mt-2">
                 <div className="alert alert-success m-0" role="status">
-                  Published: “{published}”. Holders whose value fits can prove it from their POAP card
-                  (Prove a Private Detail), without revealing it.
+                  Published: “{published}”. If their value fits, the holder can prove it from their POAP
+                  card (Prove a Private Detail), without revealing it.
                 </div>
               </div>
             )}
@@ -189,7 +249,7 @@ export default function PublishDisclosureRequest() {
             type="submit"
             className="btn btn-gradient btn-block"
             onClick={handlePublish}
-            disabled={loading || !rule}
+            disabled={loading || !rule || !recipient}
           >
             {loading ? "Publishing…" : "Publish Request"}
           </button>

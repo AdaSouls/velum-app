@@ -4,14 +4,16 @@
 //     attribute root is all-zero when there are no private attributes).
 //   - proveCredentialAttribute: same, plus "my <field> is one of the values this request accepts".
 // Both answer a DisclosureRequest someone else published (normally the organizer), so the holder
-// never publishes anything under their own caller_pk.
+// never publishes anything under their own caller_pk. Attribute requests are always addressed to
+// one holder (their holder_pk under the event's organizer): only that holder can answer, and the
+// request already names them, so that proof hides the value but not who answered.
 import { getAllDisclosureRequests, type IndexedDisclosureRequest } from './indexer.service';
 import { buildMerkleTree } from './merkle';
 import { encodeAttributeValue } from './attribute-value-codec';
 import { computeCredentialAttrLeaf } from './contract.service';
 import { credentialAttributeTree, credentialPathOnChain, fetchDeliveredPackage } from './credential-delivery';
 import { decodeValueHex, getCredentialPackage, type CredentialPackage } from './credential-store';
-import { isOwnershipRequest } from './ownership-proof';
+import { isOwnershipRequest, requestRecipient } from './ownership-proof';
 import { txHashOf } from './tx-result';
 import { fetchRequestRuleCandidates } from './disclosure-sets';
 import { expandRule, ruleAccepts, ruleSize, type CredentialField, type Rule } from './attribute-types';
@@ -75,17 +77,22 @@ export type AnswerableRequest =
 
 // Plain requests (attendance / ownership) and requests about one of this event's credential
 // fields. Requests about event-level attributes are the organizer's to answer, not the holder's.
+// Only requests this holder can actually answer: plain ones that are open or addressed to them,
+// attribute ones addressed to them (the contract rejects open attribute requests).
 export async function listAnswerableRequests(
   eventIdHex: string,
   credentialFields: CredentialField[],
+  holderPkHex: string,
 ): Promise<AnswerableRequest[]> {
+  const me = holderPkHex.toLowerCase();
   const requests = (await getAllDisclosureRequests()).filter((r) => r.eventId === eventIdHex);
   const fields = new Map(credentialFields.map((f) => [f.fieldId, f]));
   const answerable: AnswerableRequest[] = [];
   for (const request of requests) {
+    const recipient = requestRecipient(request);
     if (isOwnershipRequest(request)) {
-      answerable.push({ kind: 'attendance', request });
-    } else if (fields.has(request.fieldId)) {
+      if (!recipient || recipient === me) answerable.push({ kind: 'attendance', request });
+    } else if (fields.has(request.fieldId) && recipient === me) {
       const field = fields.get(request.fieldId) as CredentialField;
       const found = await fetchRequestRule(request.requestId, request.setRoot).catch(() => null);
       answerable.push({

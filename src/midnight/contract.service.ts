@@ -285,13 +285,20 @@ export class PoapContractService {
   // answer to their own question. Returns the derived requestId (hand it to
   // whoever should answer, alongside the actual set members so they can build
   // a real membership path — see merkle.ts's buildMerklePath).
+  //
+  // recipient: the holder pseudonym (getHolderPk under the event's organizer) that must answer,
+  // or all-zero for an open request any holder of the event can answer. proveCredentialAttribute
+  // only accepts addressed requests, answered by that recipient; proveTokenOwnership and
+  // proveEventAttendance enforce it when set. Always explicit: an open request about a credential
+  // attribute is publishable but can never be answered.
   async publishDisclosureRequest(
     label: Uint8Array,
     eventId: Uint8Array,
     fieldId: Uint8Array,
     setRoot: Uint8Array,
+    recipient: Uint8Array,
   ) {
-    return this.deployedContract.callTx.publishDisclosureRequest(label, eventId, fieldId, setRoot);
+    return this.deployedContract.callTx.publishDisclosureRequest(label, eventId, fieldId, setRoot, recipient);
   }
 
   // Stateless — never writes to the ledger, signals success purely by not
