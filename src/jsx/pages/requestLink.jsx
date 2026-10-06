@@ -45,7 +45,7 @@ export default function RequestLink() {
     };
   }, [link]);
 
-  const fields = found?.metadata?.credentialAttributeFields || [];
+  const fields = useMemo(() => found?.metadata?.credentialAttributeFields || [], [found]);
   const ready = Boolean(link && myPk && found && fields.length > 0);
 
   const openRequest = useCallback(() => {
