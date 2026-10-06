@@ -6,6 +6,8 @@ import {
   parseInviteFragment,
   parseMintFragment,
   parsePastedInput,
+  parseRequestFragment,
+  requestLink,
 } from '../../midnight/invite-links';
 
 const ORG = 'ab'.repeat(32);
@@ -38,6 +40,17 @@ describe('invite-links', () => {
     expect(parseMintFragment(`#to=${'11'.repeat(32)}`)).toEqual({ holderCode: '11'.repeat(32), eventIdHex: null });
     expect(parseMintFragment('#to=hello')).toBeNull();
     expect(parseMintFragment(`#to=${CODE}&event=zz`)).toBeNull();
+  });
+
+  it('round-trips the request link and rejects incomplete ones', () => {
+    const HOLDER = '11'.repeat(32);
+    const url = requestLink('https://app.test', EVENT, HOLDER);
+    expect(url).toBe(`https://app.test/app/request#event=${EVENT}&to=${HOLDER}`);
+    expect(parseRequestFragment(new URL(url).hash)).toEqual({ eventIdHex: EVENT, holderPkHex: HOLDER });
+    expect(parseRequestFragment(`#event=${EVENT}`)).toBeNull();
+    expect(parseRequestFragment(`#event=${EVENT}&to=${CODE}`)).toBeNull();
+    expect(parsePastedInput(url)).toEqual({ kind: 'request', route: `/app/request#event=${EVENT}&to=${HOLDER}` });
+    expect(holderCodeFromInput(url)).toBe(HOLDER);
   });
 
   it('generates the holder code from the two derived keys', async () => {

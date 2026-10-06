@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { X, EyeOff, ShieldCheck, Users, Info, Copy, Check } from "lucide-react";
+import { X, EyeOff, ShieldCheck, Users, Info, Copy, Check, Link2 } from "lucide-react";
 import { useDrawer, useDrawerDispatch } from "../../contexts/drawer/drawer.provider";
 import { errorFunction, loadingFunction, succesfullBlockchainCreation } from "../../toasts/sweetAlerts";
 import {
@@ -15,6 +15,7 @@ import { describeRule, ruleSize } from "../../../midnight/attribute-types";
 import ProofReceipt from "../../components/ProofReceipt";
 import loadingGif from "../../../images/loading.gif";
 import { friendlyErrorMessage } from "../../../midnight/friendly-error";
+import { requestLink } from "../../../midnight/invite-links";
 
 const PROGRESS_TITLE = "Proving";
 // Below this many live POAPs in the event, "one of the holders" barely hides anyone.
@@ -162,12 +163,16 @@ export default function HolderProofs() {
   // Questions about private details must name the holder who answers (poap.compact's
   // proveCredentialAttribute), so whoever asks needs this key: the holder's pseudonym under this
   // event's organizer, already public as their token's owner.
-  const [keyCopied, setKeyCopied] = useState(false);
-  const copyHolderKey = async () => {
+  // The request link carries the key plus this event, so someone other than the organizer can open
+  // Ask for a Disclosure straight from it (requestLink.jsx) — Credential events aren't listed anywhere
+  // else they could reach.
+  const [copied, setCopied] = useState(null); // "key" | "link"
+  const copy = async (what) => {
+    const text = what === "link" ? requestLink(window.location.origin, ctx.token.eventId, ctx.token.holderPk) : ctx.token.holderPk;
     try {
-      await navigator.clipboard.writeText(ctx.token.holderPk);
-      setKeyCopied(true);
-      setTimeout(() => setKeyCopied(false), 2000);
+      await navigator.clipboard.writeText(text);
+      setCopied(what);
+      setTimeout(() => setCopied(null), 2000);
     } catch (error) {
       console.error("Copy failed:", error);
     }
@@ -205,17 +210,30 @@ export default function HolderProofs() {
                   <p className="m-0 small text-muted text-break" title={ctx.token.holderPk}>
                     {ctx.token.holderPk}
                   </p>
-                  <p className="m-0 small text-muted">Give it to whoever wants to ask you something.</p>
+                  <p className="m-0 small text-muted">
+                    Give the link (or the key) to whoever wants to ask you something.
+                  </p>
                 </div>
-                <button
-                  type="button"
-                  className="btn btn-card-detail-action btn-sm flex-shrink-0"
-                  onClick={copyHolderKey}
-                  aria-label="Copy your key"
-                >
-                  {keyCopied ? <Check size={14} className="mr-2" /> : <Copy size={14} className="mr-2" />}
-                  {keyCopied ? "Copied" : "Copy"}
-                </button>
+                <div className="d-flex flex-column flex-shrink-0" style={{ gap: "6px" }}>
+                  <button
+                    type="button"
+                    className="btn btn-card-detail-action btn-sm"
+                    onClick={() => copy("link")}
+                    aria-label="Copy the link to ask you"
+                  >
+                    {copied === "link" ? <Check size={14} className="mr-2" /> : <Link2 size={14} className="mr-2" />}
+                    {copied === "link" ? "Copied" : "Copy Link"}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-card-detail-action btn-sm"
+                    onClick={() => copy("key")}
+                    aria-label="Copy your key"
+                  >
+                    {copied === "key" ? <Check size={14} className="mr-2" /> : <Copy size={14} className="mr-2" />}
+                    {copied === "key" ? "Copied" : "Copy Key"}
+                  </button>
+                </div>
               </div>
             ) : (
               <AnonymityNote holders={holders} />

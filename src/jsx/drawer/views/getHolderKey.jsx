@@ -27,7 +27,7 @@ import { friendlyErrorMessage } from "../../../midnight/friendly-error";
 // pasting their key first.
 //
 // Opening one of those links in the address bar reloads the page and drops the wallet connection,
-// so this popup ("Paste Link") also takes the links themselves: an invite or mint link is opened
+// so this popup ("Paste Link") also takes the links themselves: an invite, mint or request link is opened
 // with an in-app navigation instead, keeping the session. A bare organizer key still works as before.
 export default function GetHolderKey() {
   const { midnight } = useDrawer();
@@ -51,7 +51,7 @@ export default function GetHolderKey() {
     if (!pasted) {
       errorFunction(
         "Not a Link or Key",
-        "Paste an invite link, a mint link, or an organizer's public key (64 hex characters).",
+        "Paste an invite link, a mint link, a request link, or an organizer's public key (64 hex characters).",
         ""
       );
       return;

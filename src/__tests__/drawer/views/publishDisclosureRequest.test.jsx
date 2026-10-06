@@ -58,6 +58,14 @@ describe('PublishDisclosureRequest drawer view', () => {
     expect(screen.getByText(/connect your wallet first/i)).toBeInTheDocument();
   });
 
+  it("prefills the holder's key when opened from a request link", async () => {
+    const drawerValue = buildDrawerValue({ publishDisclosureRequest: jest.fn() });
+    drawerValue.disclosureEvent = { eventId: EVENT_ID_HEX, fields: [FIELD], recipient: RECIPIENT };
+    renderWithProviders(<PublishDisclosureRequest />, { drawerValue });
+    expect(screen.getByLabelText(/holder's key/i)).toHaveValue(RECIPIENT);
+    await waitFor(() => expect(getTokensByEvent).toHaveBeenCalled());
+  });
+
   it('shows a no-attributes message when the event has no private attribute fields', () => {
     const drawerValue = buildDrawerValue({ publishDisclosureRequest: jest.fn() });
     drawerValue.disclosureEvent = { eventId: EVENT_ID_HEX, fields: [] };

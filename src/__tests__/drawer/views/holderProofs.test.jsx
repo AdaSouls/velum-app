@@ -73,6 +73,7 @@ describe('HolderProofs drawer view', () => {
     expect(await screen.findByText(/nobody has asked you/i)).toBeInTheDocument();
     expect(screen.getByText(TOKEN.holderPk)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /copy your key/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /copy the link to ask you/i })).toBeInTheDocument();
     expect(screen.queryByText(/anonymous among/i)).not.toBeInTheDocument();
     expect(listAnswerableRequests).toHaveBeenCalledWith(TOKEN.eventId, [{ fieldId: SECTOR, label: 'Sector' }], TOKEN.holderPk);
   });

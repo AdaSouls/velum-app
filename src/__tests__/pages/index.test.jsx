@@ -7,7 +7,7 @@ describe('Dashboard Page (landing)', () => {
   it('renders the organizer-first hero headline', () => {
     renderWithProviders(<Dashboard />);
     expect(
-      screen.getByText(/Issue credentials people can prove, without exposing their data\./i),
+      screen.getByText(/^credentials you can prove, privately$/i),
     ).toBeInTheDocument();
   });
 

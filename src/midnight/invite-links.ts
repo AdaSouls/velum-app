@@ -1,4 +1,4 @@
-// The two links that replace copy-pasting keys when a credential is issued:
+// The links that replace copy-pasting keys (1 and 2 when a credential is issued, 3 after):
 //   1. Invite link — the organizer shares it from a Credential event: /app/key#organizer=…&event=…
 //      Opening it generates the holder's code for that organizer (keyInvite.jsx).
 //   2. Mint link — the holder sends it back: /app/mint#to=<holder code>[&event=…]
@@ -41,8 +41,24 @@ export function parseMintFragment(hash: string): { holderCode: string; eventIdHe
   return { holderCode: to.trim(), eventIdHex: event ? event.toLowerCase() : null };
 }
 
+// 3. Request link — a holder hands it to whoever wants to ask about a private detail of their
+//    credential: /app/request#event=<eventId>&to=<holder pk>. Opening it opens Ask for a Disclosure
+//    with both filled in (requestLink.jsx). The holder pk is their pseudonym under the event's
+//    organizer, already public as their token's owner.
+export function requestLink(origin: string, eventIdHex: string, holderPkHex: string): string {
+  return `${origin}/app/request#event=${eventIdHex}&to=${holderPkHex}`;
+}
+
+export function parseRequestFragment(hash: string): { eventIdHex: string; holderPkHex: string } | null {
+  const params = fragmentParams(hash);
+  const event = params.get('event') || '';
+  const to = params.get('to') || '';
+  if (!HEX_64.test(event) || !HEX_64.test(to)) return null;
+  return { eventIdHex: event.toLowerCase(), holderPkHex: to.toLowerCase() };
+}
+
 export type PastedInput =
-  | { kind: 'invite' | 'mint'; route: string }
+  | { kind: 'invite' | 'mint' | 'request'; route: string }
   | { kind: 'key'; organizerPkHex: string };
 
 // What someone pasted into "Paste Link" (getHolderKey.jsx): an invite link, a mint link, or an
@@ -60,14 +76,21 @@ export function parsePastedInput(text: string): PastedInput | null {
   }
   if (url.pathname === '/app/key' && parseInviteFragment(url.hash)) return { kind: 'invite', route: `/app/key${url.hash}` };
   if (url.pathname === '/app/mint' && parseMintFragment(url.hash)) return { kind: 'mint', route: `/app/mint${url.hash}` };
+  if (url.pathname === '/app/request' && parseRequestFragment(url.hash)) {
+    return { kind: 'request', route: `/app/request${url.hash}` };
+  }
   return null;
 }
 
-// Mint POAP's recipient field takes either the holder code or the whole mint link it came in.
+// Mint POAP's and Ask for a Disclosure's recipient fields take either the holder code or the whole
+// mint/request link it came in.
 export function holderCodeFromInput(text: string): string {
   const pasted = parsePastedInput(text);
-  if (pasted?.kind !== 'mint') return text;
-  return parseMintFragment(pasted.route.slice(pasted.route.indexOf('#')))?.holderCode ?? text;
+  if (!pasted || pasted.kind === 'key') return text;
+  const hash = pasted.route.slice(pasted.route.indexOf('#'));
+  if (pasted.kind === 'mint') return parseMintFragment(hash)?.holderCode ?? text;
+  if (pasted.kind === 'request') return parseRequestFragment(hash)?.holderPkHex ?? text;
+  return text;
 }
 
 type HolderCodeService = {

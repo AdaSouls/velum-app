@@ -467,7 +467,7 @@ const HeroSection = React.forwardRef(({ scrollerRef }, ref) => {
         <motion.div className="index-hero" style={{ y, opacity }}>
           <span className="role-eyebrow index-hero-eyebrow">Private digital credentials</span>
           <h1 className="role-hero-title index-hero-title">
-            Issue credentials people can prove, without exposing their data.
+            Credentials you can prove, privately
           </h1>
           <p className="text-muted role-hero-desc index-hero-desc">
             Certificates, event attendance, memberships and access passes. You create them, your

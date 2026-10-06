@@ -47,7 +47,8 @@ async function pollForRequestId({ verifierPkHex, eventIdHex, fieldIdHex, setRoot
 
 // Any connected wallet can publish a disclosure request (poap.compact's publishDisclosureRequest has
 // no organizer/admin gate) — this popup is opened from eventCard.jsx's "Ask for a Disclosure" button
-// on any Credential event with private fields (its metadataURI's credentialAttributeFields, see
+// (the organizer, from My Events) or from a holder's request link (/app/request, anyone else), on any
+// Credential event with private fields (its metadataURI's credentialAttributeFields, see
 // createEvent.jsx). The question depends on the field's type (QuestionBuilder.jsx): a list of
 // accepted values, or a number/date range. Holders answer from their POAP card (holderProofs.jsx),
 // so the question's rule is published for them (publishRequestRule); the chain only keeps the root
@@ -67,7 +68,8 @@ export default function PublishDisclosureRequest() {
   const [ruleProblem, setRuleProblem] = useState(null);
   const [loading, setLoading] = useState(false);
   const [published, setPublished] = useState(null); // the question text, once published
-  const [recipientInput, setRecipientInput] = useState("");
+  // Prefilled when opened from a holder's request link (requestLink.jsx).
+  const [recipientInput, setRecipientInput] = useState(disclosureEvent?.recipient || "");
   const recipient = parseHolderCode(recipientInput);
   const recipientPkHex = recipient?.holderPkHex || null;
   // Informative only: whether that key holds a live POAP of this event right now. A request can be
@@ -214,8 +216,8 @@ export default function PublishDisclosureRequest() {
                 </small>
               )}
               <small className="form-text text-muted">
-                Only this holder will be able to answer. They find their key on their POAP, under Prove
-                a Private Detail. Not their wallet address.
+                Only this holder will be able to answer. They find their key (or a link with it) on
+                their POAP, under Prove a Private Detail. Not their wallet address.
               </small>
             </div>
 

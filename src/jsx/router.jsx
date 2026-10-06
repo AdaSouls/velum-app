@@ -22,6 +22,7 @@ import CredentialImport from "./pages/credentialImport";
 import VerifyProof from "./pages/verifyProof";
 import KeyInvite from "./pages/keyInvite";
 import MintLink from "./pages/mintLink";
+import RequestLink from "./pages/requestLink";
 
 const Router = () => {
   const dispatch = useDrawerDispatch();
@@ -79,6 +80,7 @@ const Router = () => {
           <Route path="/app/verify" element={<VerifyProof />} />
           <Route path="/app/key" element={<KeyInvite />} />
           <Route path="/app/mint" element={<MintLink />} />
+          <Route path="/app/request" element={<RequestLink />} />
         </Routes>
       </div>
     </BrowserRouter>
