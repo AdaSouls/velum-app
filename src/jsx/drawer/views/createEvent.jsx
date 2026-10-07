@@ -300,6 +300,18 @@ export default function CreateEvent() {
       }
       const privateAttributesRoot = new Uint8Array(32);
 
+      // Credential: the key holders seal credential update requests to (credential-update.ts) — e.g.
+      // after their document changes. Derived from this identity, so nothing new to store. Best
+      // effort: without it the event works the same, its holders just can't ask for updates.
+      let updateRequestKey = null;
+      if (category === "credential" && typeof provider.service?.getInboxKeyPair === "function") {
+        try {
+          updateRequestKey = (await provider.service.getInboxKeyPair()).publicKeyHex;
+        } catch (inboxError) {
+          console.error("Could not derive the update-request key:", inboxError);
+        }
+      }
+
       const taxonomyEntries = serializeTaxonomyValues(category, taxonomyValues);
       const hasOrgProfileField = Object.values(organizationProfile).some(
         (value) => typeof value === "string" && value.trim().length > 0,
@@ -319,6 +331,7 @@ export default function CreateEvent() {
           ? { credentialAttributeFields: credentialAttributeFieldsForMetadata }
           : {}),
         ...(validity ? { validity } : {}),
+        ...(updateRequestKey ? { updateRequestKey } : {}),
       });
 
       const expiration = expirationDate

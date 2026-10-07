@@ -508,3 +508,233 @@ posterior. Opciones:
 
 Conviene resolverlo junto con el "Ask for Proof of Ownership" automático de arriba: mismo momento,
 mismo patrón.
+
+---
+
+# Brainstorm — Pedidos de verificación dirigidos (2026-10-02)
+
+Estado: **diseño preliminar, sin implementar.** El usuario lo va a conversar con Matías para ver si
+hace falta.
+
+## Objetivo
+
+Un **verificador** externo pide una prueba sobre una credencial y se la pide a una persona puntual.
+Ejemplo: un posgrado le pide a un postulante que pruebe "nota ≥ 8" de su diploma de la UTN.
+
+- El **organizador** (la UTN) queda afuera del flujo: solo emitió la credencial.
+- Aplica **solo a credenciales** (categoría Credential, con datos privados).
+- No hay fecha límite.
+
+## Lo que se sabe del sistema (verificado en `poap.compact` d1e2a1f y en el frontend)
+
+- `publishDisclosureRequest(label, eventId, fieldId, setRoot)` **no tiene control de quién llama**.
+  Cualquier wallet puede publicar un pedido sobre cualquier evento, y queda como `verifier`. El
+  pedido se ata al **evento**, no a una persona.
+- El holder ve **todos** los pedidos del evento de su credencial. `listAnswerableRequests` en
+  `holder-proofs.ts` filtra solo por `eventId`, sin importar quién los publicó, y no hay
+  notificaciones.
+- Hoy "Ask for a Disclosure" solo aparece en la tarjeta del evento, y las credenciales no se listan en
+  Explore. En la práctica, un tercero no puede publicar un pedido desde la interfaz aunque el contrato
+  se lo permita.
+- `proveCredentialAttribute` prueba "alguna credencial viva de este evento tiene ese valor en el
+  conjunto", **sin revelar ni el token, ni el holder, ni el valor**.
+- **No hay variante de un solo uso para credenciales.** `proveAttributeMembershipOnce` (con
+  nullifier) existe solo para los atributos a nivel evento, que ya se quitaron de la app.
+- **Hallazgo clave: no se puede atar la respuesta al postulante con el contrato actual.** La prueba
+  anónima no dice qué credencial la respondió. Sumar "Prove Ownership" (que muestra el número de
+  token) es una prueba **separada**: no demuestra que la nota ≥ 8 sea de ese mismo token. Un
+  postulante con nota 6 podría pedirle a un compañero con nota 9 que responda su pedido.
+
+## Dónde va en la app
+
+No en Organizer: verificar es otro rol. Propuesta: que **`/app/verify` pase a tener dos partes**:
+
+- **"Ask for proof"** (nuevo, requiere wallet porque publicar es una transacción).
+- **"Check a proof"** (lo que existe hoy, sin wallet).
+
+Se entra desde el nav (por ejemplo, un link "Verify") y desde el launcher. No hace falta un tercer
+rol en el switch de la barra inferior.
+
+## Diseño preliminar
+
+### Datos (público / privado)
+- On-chain (público): el pedido (evento, campo, raíz del conjunto) y quién lo publicó. Igual que hoy.
+- El texto de la condición ("Nota ≥ 8") se publica en IPFS como hoy (`publishRequestRule`).
+- La respuesta sigue siendo anónima: el verificador ve "válido", la condición y el emisor (con badge
+  Verified si corresponde). Nunca ve la nota ni la wallet.
+- **No prometer** "solo esta persona puede responder": no es cierto con el contrato actual (ver
+  hallazgo). La interfaz tiene que decir "le pediste la prueba a esta persona", no "solo ella puede
+  responder".
+
+### Flujo
+1. **Cómo encuentra el verificador la credencial:** el postulante comparte, desde su credencial, un
+   link "Share for verification" con el evento (sin token ni wallet). Alternativa: el verificador
+   busca al emisor por nombre o clave entre los eventos del indexer (incluye los Credential que no
+   están en Explore).
+2. **El verificador arma el pedido** con el formulario que ya existe (`QuestionBuilder`, condiciones
+   por tipo de campo) y obtiene un **link + QR** (mismo patrón que Invite Link) para mandarle solo al
+   postulante.
+3. **El postulante abre el link** y ve ese pedido en "Prove a Private Detail" de su credencial. Si su
+   valor no califica, el botón queda deshabilitado, como hoy.
+4. **Responde** y le manda el comprobante al verificador, que lo valida en "Check a proof".
+
+### Visibilidad dirigida (solo frontend)
+- La lista del holder muestra **solo los pedidos que abrió con un link**, más los "Ask for Proof of
+  Ownership" del propio organizador. Los pedidos abiertos se guardan en el navegador y van en el
+  backup cifrado.
+- Es una restricción de **interfaz**: el pedido sigue en la blockchain y alguien con conocimientos
+  técnicos podría responderlo.
+
+### Frontend
+- `/app/verify`: pestañas "Ask for proof" y "Check a proof".
+- Reutiliza `publishDisclosureRequest.jsx` (y `QuestionBuilder`) fuera de la tarjeta del evento.
+- Reutiliza `LinkQrCard` para el link y el QR del pedido.
+- Nuevo en la credencial del holder: "Share for verification".
+- Cambia `listAnswerableRequests`: filtra por pedidos abiertos desde un link.
+- Estilo: el mismo de los popups y las tarjetas actuales (oscuro, vidrio).
+
+## Decisiones abiertas (para después de hablar con Matías)
+
+1. ¿Hace falta esta funcionalidad, o alcanza con que el organizador publique las preguntas?
+2. ¿Cómo encuentra el verificador la credencial: link compartido por el postulante, búsqueda del
+   emisor, o las dos?
+3. ¿La lista del holder pasa a mostrar solo los pedidos abiertos desde un link? Esto cambia el
+   comportamiento actual para todos.
+4. ¿Se acepta el riesgo de que un compañero responda por el postulante, o se pide el cambio de
+   contrato de abajo antes de lanzarlo?
+
+## Qué necesitaría el backend (para la garantía fuerte)
+
+Para atar la respuesta al postulante, cualquiera de estas variantes es un cambio de contrato:
+
+- **Pedido dirigido:** el pedido guarda un destinatario (por ejemplo, el `holder_pk` para el emisor
+  de esa credencial) y `proveCredentialAttribute` exige que quien responde sea ese destinatario. El
+  verificador necesita conocer ese valor, que el postulante le pasa en el link.
+- **Un solo uso para credenciales:** una variante `proveCredentialAttributeOnce` con nullifier por
+  (credencial, pedido), para que un pedido dirigido no pueda responderse varias veces.
+
+Sin esto, el diseño de arriba sirve como **comodidad** (la pregunta le llega a quien corresponde),
+no como **garantía**.
+
+## Riesgos
+
+- Sobreprometer privacidad o exclusividad en la interfaz (ver hallazgo clave).
+- Cambiar la lista del holder puede ocultar preguntas que el organizador publicó para todos. Por eso
+  se mantienen visibles las del propio organizador.
+- Los links del pedido se pueden reenviar; no son secretos.
+
+## Próximo paso
+
+Si Matías confirma que hace falta: cerrar las decisiones 1–4 y pasar a Plan mode para la
+implementación. Si se pide la garantía fuerte, esperar el cambio de contrato antes de lanzarlo.
+
+---
+
+# Brainstorm — Documentos de identidad en credenciales + pedidos de actualización (2026-10-07)
+
+Estado: **diseño cerrado 2026-10-07, sin implementar** (próximo paso: Plan mode). Contrato ya sincronizado (backend `0e37df6`, preprod
+`fadfffae…152a`, rama `chore/contract-identity-documents`). Fuente: flujos 12 y 13 de
+`docs/01-contract/circuits.md` en `AdaSouls/velum` develop `ec318ef`, y charla con Matías del 07/10.
+
+## Objetivo
+
+- **Evitar el préstamo de credenciales.** Hoy un postulante con nota 6 puede darle al verificador la
+  clave de un compañero con nota 9, y el compañero responde. Con un documento de identidad dentro de
+  la credencial, el verificador comprueba que la credencial es de la persona cuyo documento tiene
+  delante.
+- **Actualizar la credencial** cuando cambia el documento: el holder le pide al emisor que la vuelva
+  a emitir.
+- Solo credenciales. **Opcional**: una credencial puede no tener documentos, o tener uno o varios.
+
+## Lo que se sabe (contrato + charla con Matías)
+
+- `computeIdentityValue(country, docType, number, salt)` es una función local, sin transacción.
+  Entradas: país ISO alpha-3 (`ARG`), tipo (`national_id`, `passport`…) y número en mayúsculas sin
+  separadores, cada uno rellenado a 32 bytes; `salt` son 32 bytes aleatorios distintos de cero. El
+  resultado se guarda como un atributo más de la credencial, con su propio `fieldId`.
+- El **salt (código de identidad)** es imprescindible. La raíz del conjunto de cada pedido es
+  pública; sin salt, los números de documento se podrían adivinar por fuerza bruta.
+- El verificador comprueba el documento físico y le pide al holder el código. Con eso calcula el
+  mismo valor y publica un **pedido dirigido** cuyo conjunto tiene solo ese valor.
+- **Dos pedidos, dos pruebas, dos firmas.** Uno para la identidad y otro para la condición real
+  (p. ej. nota ≥ 8), los dos dirigidos al mismo seudónimo. Como un holder tiene una sola credencial
+  por evento, las dos pruebas son sobre la misma credencial. Matías dijo "todo en una misma acción":
+  se puede sentir como una sola acción en la interfaz, pero la wallet firma dos veces (confirmado
+  con Matías).
+- Actualización: `requestCredentialUpdate(tokenId, payloadCommit)` lo llama el dueño del token.
+  Pedirla de nuevo reemplaza el pedido anterior. El contenido viaja cifrado al emisor fuera de la
+  cadena; on-chain solo queda que se pidió y cuándo. El emisor puede cerrarlo con
+  `dismissCredentialUpdate`, o con `burn` + `mintTo` al mismo seudónimo (el `burn` también cierra el
+  pedido). Indexer: `/api/credential-update-requests?issuerPk=…&status=pending`.
+
+## Diseño preliminar
+
+### Datos (público / privado)
+- On-chain: solo el valor con hash y salt, dentro del árbol de la credencial (no se ve). El pedido de
+  identidad (dirigido) es público: se ve que *alguien* preguntó por un campo de identidad a ese
+  seudónimo, pero no qué documento.
+- **No publicar** la regla del pedido de identidad en `/api/disclosure-sets`: el holder verifica
+  localmente que su valor coincide con la raíz del conjunto (un solo elemento).
+- Los pedidos de actualización son públicos en cuanto a su existencia. La interfaz tiene que avisarle
+  al holder: "cualquiera puede ver que pediste una actualización, no qué cambió".
+- No prometer más de lo que da: sirve si **el emisor comprobó el documento antes de emitir** y **el
+  verificador comprueba el del postulante**.
+
+### El perfil (decidido 2026-10-07)
+El perfil **no sirve como prueba de identidad**: lo completa el propio dueño de la wallet, se puede
+editar y nadie lo comprueba. El préstamo ocurre justamente porque una wallet no es una persona. Sirve
+como comodidad:
+- **Perfil del organizador** → guarda su **clave pública de cifrado** para recibir pedidos de
+  actualización. Viaja en la metadata pública de sus eventos o credenciales, y el holder la usa para
+  cifrar el pedido (mismo esquema que `credential-crypto.ts`, en sentido inverso).
+- **Datos de identidad del holder (privados, nunca publicados)** → en el navegador: documentos y
+  código de identidad de cada credencial. Entran en el backup cifrado (`BACKED_UP_PREFIXES`). Sirven
+  para completar solos el link para el verificador y el formulario de actualización.
+- El organizador **no** usa el perfil para esto: el documento del destinatario lo tipea él, a partir
+  del documento que comprobó.
+
+### Frontend (borrador)
+- **Emisión (`mintPoap.jsx` + `PrivateAttributesStepFields`):** tipo de campo nuevo "Documento de
+  identidad". Al emitir se genera el salt, se calcula `computeIdentityValue` y el salt va al holder
+  junto con los demás datos privados (entrega cifrada existente).
+- **Holder, en su credencial:** el documento se muestra enmascarado (`ARG · DNI · ••••5678`), junto
+  con el código de identidad y la opción de copiarlo o compartirlo.
+- **Verificador (`publishDisclosureRequest.jsx` / `QuestionBuilder`):** condición "Identidad" donde
+  ingresa el número que ve en el documento y el código. La app calcula el valor y publica el pedido
+  dirigido.
+- **Holder responde (Prove a Private Detail):** si hay pedido de identidad + pedido de condición del
+  mismo verificador, un botón "Responder" que encadena las dos pruebas (dos firmas, avisado antes).
+- **Actualización:**
+  - Holder: "Pedir actualización" en la credencial → elige documento y escribe el dato nuevo → se
+    arma un sobre cifrado al organizador con el paquete actual + los cambios + su propia clave de
+    cifrado → se sube por un endpoint nuevo de `server/` → `requestCredentialUpdate` con
+    `payloadCommit = sha256(sobre)`.
+  - Organizador: lista de pedidos pendientes → verifica que el paquete viejo coincide con la cadena →
+    "Rechazar" (`dismissCredentialUpdate`) o "Reemitir" (`burn` + `mintPoap` precargado).
+- Estilo: el de los popups y tarjetas actuales (oscuro, vidrio, sin bisel).
+
+## Decisiones (cerradas 2026-10-07)
+
+1. **País y tipo de documento los fija el organizador por campo** (p. ej. "DNI Argentina"). Al emitir
+   solo se escribe el número.
+2. **El link para el verificador incluye el código de identidad, nunca el número.** El verificador
+   escribe el número que ve en el documento físico. Va después del `#` (no llega a ningún servidor),
+   extendiendo el link existente `/app/request#…&to=…`. No debilita la protección: con el código de
+   otra persona el valor no coincide. Si se filtra el link, alguien que sepa el DNI puede relacionar
+   esa credencial con la persona, pero no responder por ella; cada credencial tiene su propio código.
+   La pantalla de compartir avisa: "Este link es personal: dáselo solo al verificador".
+3. **Un solo popup "Pedir prueba"** publica los dos pedidos (identidad + condición), y del lado del
+   holder **un solo "Responder"** encadena las dos pruebas (dos firmas, avisado antes).
+4. **Reemitir hace todo, en etapas guiadas:** revisar el pedido → quemar la credencial vieja →
+   emitir la nueva con `mintPoap` precargado (datos anteriores + documento nuevo). Hay que prever
+   retomar si se corta entre la quema y la emisión.
+5. **Alcance: todo** (identidad + actualización), apuntando al Hito 5 (vence 2026-10-30).
+6. **Confirmado con Matías:** "una misma acción" son dos pruebas y dos firmas.
+
+## Riesgos
+- Prometer de más en la interfaz: no prueba quién es la persona, solo que el documento coincide con
+  el que el emisor cargó.
+- Si se filtra el código de identidad junto con el DNI, cualquiera puede comprobar esa credencial
+  (pero no responder: responder sigue necesitando la clave del holder).
+- Los pedidos de actualización dejan un rastro público (se ve que se pidió y cuándo).
+- El endpoint nuevo en `server/` para los sobres de actualización es infraestructura nueva.

@@ -3,11 +3,21 @@ import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import HolderProofs from '../../../jsx/drawer/views/holderProofs';
 import { mockDrawerContext, renderWithProviders } from '../../../testUtils';
-import { listAnswerableRequests, proveAttendance, proveAttribute, valueQualifies } from '../../../midnight/holder-proofs';
+import {
+  groupAnswerable,
+  isIdentityRequest,
+  listAnswerableRequests,
+  proveAttendance,
+  proveAttribute,
+  valueQualifies,
+} from '../../../midnight/holder-proofs';
 import { getEvent } from '../../../midnight/indexer.service';
 
 // holder-proofs pulls in the compiled contract (WASM) — mocked, see merkle.test.ts.
+// Grouping is unit-tested in holder-proofs.test.ts; here every request stands alone.
 jest.mock('../../../midnight/holder-proofs', () => ({
+  groupAnswerable: jest.fn(),
+  isIdentityRequest: jest.fn(),
   listAnswerableRequests: jest.fn(),
   proveAttendance: jest.fn(),
   proveAttribute: jest.fn(),
@@ -37,6 +47,8 @@ function renderView(mode = 'ownership') {
 describe('HolderProofs drawer view', () => {
   beforeEach(() => {
     getEvent.mockResolvedValue({ eventId: TOKEN.eventId, liveTokens: 40 });
+    groupAnswerable.mockImplementation((items) => items.map((item) => [item]));
+    isIdentityRequest.mockImplementation((item) => item.rule?.op === 'identity');
   });
 
   it('says how many holders the proof hides among', async () => {
@@ -75,7 +87,12 @@ describe('HolderProofs drawer view', () => {
     expect(screen.getByRole('button', { name: /copy your key/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /copy the link to ask you/i })).toBeInTheDocument();
     expect(screen.queryByText(/anonymous among/i)).not.toBeInTheDocument();
-    expect(listAnswerableRequests).toHaveBeenCalledWith(TOKEN.eventId, [{ fieldId: SECTOR, label: 'Sector' }], TOKEN.holderPk);
+    expect(listAnswerableRequests).toHaveBeenCalledWith(
+      TOKEN.eventId,
+      [{ fieldId: SECTOR, label: 'Sector' }],
+      TOKEN.holderPk,
+      expect.objectContaining({ fields: expect.any(Array) }),
+    );
   });
 
   it('shows only the questions of its own mode', async () => {

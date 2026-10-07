@@ -58,7 +58,7 @@ de credencial…), usada para describir y filtrar.
   cada vez que algo cambia; también hay descarga en archivo. Incluye la identidad, los datos
   privados de las credenciales y el historial de pruebas.
 - **Progreso de cada transacción** en un solo popup (preparar → probar → firmar → confirmar).
-- **Ver en la cadena**: "View Blockchain Info" en eventos y POAPs (ids, bloques, transacciones).
+- **Ver en la cadena**: "View Info" en eventos y POAPs (ids, bloques, transacciones).
 
 ### 3.2 Organizador
 
@@ -92,6 +92,18 @@ de credencial…), usada para describir y filtrar.
   - Texto o Lista: "es uno de …".
   - Número: "≥", "≤", "entre" o "es uno de".
   - Fecha: "antes de", "después de", "entre" o "al menos N años atrás".
+  - Vencimiento (campo automático "Valid until"): en palabras simples, "sigue vigente", "está
+    vencida", "vence dentro de 3/6 meses o 1/2 años" o "sigue vigente al menos 3/6 meses o 1/2
+    años". Se cuenta desde el día en que se pregunta.
+  - **Control de identidad** (credenciales con un documento de identidad): el verificador escribe el
+    número del documento que tiene delante y el código de identidad del holder (viene en su link).
+    Se publica como un segundo pedido junto con la pregunta; el holder responde los dos juntos.
+- **Documentos de identidad en las credenciales**: un tipo de campo privado con país y tipo de
+  documento fijos (por ejemplo "DNI, Argentina"). Al emitir se escribe el número; en la cadena solo
+  queda una huella con sal. Evita que alguien responda con la credencial de un amigo.
+- **Pedidos de actualización**: en la lista de holders, "Review Update" muestra el número viejo y el
+  nuevo; se rechaza o se reemite en tres pasos guiados (revisar, revocar, emitir). Si se corta entre
+  los dos últimos, "Finish Re-issue" lo retoma.
 - **Perfil de organizador verificado**: el admin puede registrar organizadores (insignia opcional;
   no hace falta para crear eventos).
 
@@ -112,6 +124,12 @@ de credencial…), usada para describir y filtrar.
 - **Prove Ownership Anonymously**: "tengo un POAP válido de este evento", sin decir cuál.
 - **Prove a Private Detail**: responde las preguntas del organizador sin revelar el valor, qué
   credencial es ni la wallet. Si el valor no califica, el botón se desactiva sin tocar la cadena.
+  Un control de identidad y la pregunta que vino con él se responden juntos ("Respond", una firma
+  cada uno).
+- **Código de identidad**: si la credencial tiene un documento, el holder ve el documento tapado y
+  su código. El link para quien pregunta lleva el código, nunca el número.
+- **Request Update**: si cambia su documento, le pide al organizador que reemita la credencial. El
+  pedido va cifrado; en la cadena solo queda que lo pidió.
 - **Aviso de anonimato**: antes de una prueba anónima, "Anonymous among N holders". Con menos de 5
   aparece un aviso, porque con pocos holders la prueba casi identifica a la persona.
 - **Comprobante** de cada prueba, con link de verificación, y **Proof history** en la card
@@ -207,6 +225,8 @@ fan recibe su entrada cifrada → en la puerta, seguridad le pide una prueba y l
 | La respuesta concreta del holder | Nadie: solo que califica |
 | El historial de pruebas | Solo el holder |
 | La identidad privada (`local_sk`) | Solo el navegador del usuario (y su backup cifrado) |
+| Número de documento y código de identidad | El holder, el emisor y a quien el holder se los muestre |
+| Que un holder pidió una actualización (no qué cambió) | Cualquiera |
 
 **Advertencia honesta:** las pruebas se generan en un *proof server*. En producción será uno
 alojado por el proyecto, que ve los datos de cada prueba mientras la genera (no los guarda). La
@@ -220,7 +240,7 @@ cadena y los demás usuarios no ven nada.
   un solo uso (necesita un cambio de contrato).
 - **El anonimato depende del tamaño del evento.** La app lo avisa con menos de 5 holders.
 - **La validez no la conoce el contrato.** La calcula la app. Una prueba anónima de una credencial
-  no dice si venció; para eso está la pregunta "Valid until ≥ hoy".
+  no dice si venció; para eso está la pregunta "sigue vigente" sobre el campo "Valid until".
 - **Rangos grandes tardan.** Un rango de fechas de 100 años son unos 36.500 valores: unos segundos
   para preguntar, probar y verificar.
 - **Cada prueba es una transacción.** Cuesta DUST y tarda lo que tarde la red.

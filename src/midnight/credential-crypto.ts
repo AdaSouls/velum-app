@@ -8,6 +8,9 @@
 // The public half travels inside the holder's "Get My Key" code (see formatHolderCode).
 
 const KEY_DOMAIN = new TextEncoder().encode('velum:enc-key:v1:');
+// The organizer's inbox key (credential update requests, credential-update.ts): one per identity,
+// not per counterpart — holders find it in the event's metadata (updateRequestKey).
+const INBOX_KEY_DOMAIN = new TextEncoder().encode('velum:issuer-inbox-key:v1:');
 const HKDF_INFO = new TextEncoder().encode('velum:credential-delivery:v1');
 // DER prefix of a PKCS#8 X25519 private key (RFC 8410) — Web Crypto can't import a raw X25519
 // private key, only PKCS#8 or JWK.
@@ -57,7 +60,16 @@ export async function sha256(bytes: Uint8Array): Promise<Uint8Array> {
 }
 
 export async function deriveEncryptionKeyPair(secretKey: Uint8Array, organizerPk: Uint8Array): Promise<EncryptionKeyPair> {
-  const seed = await sha256(concat(KEY_DOMAIN, secretKey, organizerPk));
+  return keyPairFromSeed(await sha256(concat(KEY_DOMAIN, secretKey, organizerPk)));
+}
+
+// Same construction, own domain: the key holders seal credential update requests to. Derived from
+// local_sk, so it needs no storage and comes back with the backup like everything else.
+export async function deriveInboxKeyPair(secretKey: Uint8Array): Promise<EncryptionKeyPair> {
+  return keyPairFromSeed(await sha256(concat(INBOX_KEY_DOMAIN, secretKey)));
+}
+
+async function keyPairFromSeed(seed: Uint8Array): Promise<EncryptionKeyPair> {
   const privateKey = await crypto.subtle.importKey('pkcs8', concat(PKCS8_X25519_PREFIX, seed), X25519, true, ['deriveBits']);
   const jwk = await crypto.subtle.exportKey('jwk', privateKey);
   if (!jwk.x) throw new Error('This browser could not derive an X25519 public key.');

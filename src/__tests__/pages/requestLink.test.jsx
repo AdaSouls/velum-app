@@ -48,7 +48,7 @@ describe('RequestLink page', () => {
     await waitFor(() =>
       expect(dispatch).toHaveBeenCalledWith({
         type: 'PUBLISH_DISCLOSURE_REQUEST',
-        payload: { eventId: EVENT_ID, fields: FIELDS, recipient: HOLDER },
+        payload: { eventId: EVENT_ID, fields: FIELDS, recipient: HOLDER, idCodes: {} },
       }),
     );
     expect(dispatch).toHaveBeenCalledTimes(1);

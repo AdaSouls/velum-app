@@ -235,7 +235,9 @@ const Docs = () => {
                   <li>
                     <strong>Private fields</strong> (Credential only): the details each person's
                     credential will carry, like a grade or an ID number. You choose the type (text,
-                    whole number, date or a list of options). Only the field names are public.
+                    whole number, date, a list of options, or an identity document). Only the field
+                    names are public. A Credential with a validity period also gets a private
+                    <strong> Valid until</strong> date automatically.
                   </li>
                   <li>
                     <strong>POAP image</strong> (Event and Subscription): the image people see on
@@ -299,6 +301,13 @@ const Docs = () => {
                   The private details are sent to the recipient encrypted. Only a fingerprint of them
                   is stored on the blockchain. You can't issue a credential to yourself.
                 </p>
+                <p>
+                  <strong>Identity document fields</strong> (for example "National ID, Argentina")
+                  tie the credential to its holder. Check the person's document and type its number;
+                  it's never published. The holder gets an <strong>identity code</strong> with it, and
+                  a verifier who checks their document can confirm the credential is theirs, so nobody
+                  can answer with a friend's credential.
+                </p>
               </Section>
 
               <Section id="holders" title="Holders and revoking">
@@ -311,6 +320,14 @@ const Docs = () => {
                   is no longer valid. It's permanent: the holder still sees it, marked Burned, but
                   can no longer prove anything with it. After revoking, you can issue a new one to
                   the same person.
+                </p>
+                <p>
+                  <strong>Update requests:</strong> when a holder's document changes, they can ask you
+                  to issue their credential again. Rows with a request show <strong>Review Update</strong>:
+                  you see the old and the new number, then either dismiss it or re-issue in three
+                  guided steps (review, revoke the old credential, issue the new one). If you stop
+                  between the last two, <strong>Finish Re-issue</strong> on that row picks it up again.
+                  Only Credential events created after this feature accept requests.
                 </p>
               </Section>
 
@@ -331,6 +348,18 @@ const Docs = () => {
                       <li>Number: at least, at most, between, or one of</li>
                       <li>Date: before, after, between, or "at least N years ago" (an age check)</li>
                     </ul>
+                  </li>
+                  <li>
+                    <strong>Validity</strong> (credentials with a Valid until date): ask in plain words
+                    whether it's <em>still valid</em>, <em>has expired</em>, <em>expires within</em> 3
+                    months, 6 months, 1 year or 2 years, or <em>is valid for at least</em> one of those.
+                    Counted from the day you ask; the holder answers without revealing the date.
+                  </li>
+                  <li>
+                    <strong>Identity check</strong> (credentials with an identity document): type the
+                    number on the person's document and their identity code (it comes in their link).
+                    It's published as a second request together with your question; the holder
+                    answers both at once, one signature each.
                   </li>
                 </ul>
               </Section>
@@ -404,6 +433,17 @@ const Docs = () => {
                     organizer, can ask you. Since the question names you, the asker knows the answer
                     is yours. If your value doesn't qualify, the button is disabled.
                   </li>
+                  <li>
+                    <strong>Identity documents:</strong> if your credential carries one, the link also
+                    carries your identity code (never the number). Give it only to whoever checks your
+                    document. An identity check and the question that came with it are answered
+                    together with <strong>Respond</strong>.
+                  </li>
+                  <li>
+                    <strong>Request Update:</strong> if your document changes, ask the organizer to
+                    issue your credential again. Only they can read the request; anyone can see that
+                    you asked, not what changed.
+                  </li>
                 </ul>
                 <p>
                   Each proof gives you a receipt with a link to share with whoever asked. With fewer
@@ -462,6 +502,14 @@ const Docs = () => {
                       <tr>
                         <td>Which wallet holds a credential</td>
                         <td>Nobody: holders use a different key with each organizer</td>
+                      </tr>
+                      <tr>
+                        <td>Identity document numbers and identity codes</td>
+                        <td>Only the holder, the organizer, and whoever the holder shows them to</td>
+                      </tr>
+                      <tr>
+                        <td>That a holder asked for an update (not what changed)</td>
+                        <td>Everyone</td>
                       </tr>
                       <tr>
                         <td>The answer to a proof</td>

@@ -7,7 +7,8 @@ import { describeValidity, formatUntil, parseValidity, validityStatus } from "..
 import { decodeProofDetails, isZeroHex } from "../../midnight/proof-transcript";
 import { getEvent, getToken } from "../../midnight/indexer.service";
 import { fetchMetadata } from "../hooks/useEventMetadata";
-import { describeRule } from "../../midnight/attribute-types";
+import { describeRule, isIdentityField } from "../../midnight/attribute-types";
+import { documentLabel } from "../../midnight/identity";
 import { explorerBlockUrl, explorerTxUrl } from "../../utils/midnightExplorer";
 import { friendlyErrorMessage } from "../../midnight/friendly-error";
 
@@ -55,9 +56,16 @@ async function loadProofContext(entryPoint, details, proofTimestamp) {
   if (!isZeroHex(details.fieldId)) {
     const fields =
       entryPoint === "proveCredentialAttribute" ? metadata?.credentialAttributeFields : metadata?.privateAttributeFields;
-    fieldLabel = (fields || []).find((field) => field.fieldId?.toLowerCase() === details.fieldId)?.label || null;
+    const field = (fields || []).find((f) => f.fieldId?.toLowerCase() === details.fieldId);
+    fieldLabel = field?.label || null;
+    // An identity check: its one value is known only to whoever asked and the holder, so this page
+    // can't rebuild the set — it says what kind of question it was; the asker knows which document.
+    if (isIdentityField(field)) {
+      fieldLabel = `${field.label} (${documentLabel(field)})`;
+      rule = { op: "identity" };
+    }
   }
-  if (!isZeroHex(details.setRoot)) {
+  if (!rule && !isZeroHex(details.setRoot)) {
     // holder-proofs pulls in the compiled contract — only load it when a set has to be checked.
     // checkAll: a question shown on this page must match the on-chain root, even a big range.
     const { fetchRequestRule } = await import("../../midnight/holder-proofs");

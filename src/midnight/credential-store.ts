@@ -4,6 +4,7 @@
 // sealed envelope stays on Pinata and the key is re-derived from local_sk — but the fallback-link
 // import only ever lives here.
 import { markBackupDirty } from './backup-status';
+import type { IdentityOpening } from './identity';
 
 export const CREDENTIAL_PACKAGE_PREFIX = 'velum:midnight:credential:';
 
@@ -12,6 +13,9 @@ export type CredentialField = {
   label: string;
   valueHex: string; // encodeAttributeValue(value), 32 bytes
   randHex: string; // 32 random bytes, never reused
+  // Identity fields only: the document behind valueHex (= computeIdentityValue(country, docType,
+  // number, salt)). The salt is the holder's "identity code" for this credential.
+  identity?: IdentityOpening;
 };
 
 export type CredentialPackage = {

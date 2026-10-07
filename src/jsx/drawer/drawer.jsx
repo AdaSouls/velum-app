@@ -17,6 +17,8 @@ import BurnToken from './views/burnToken.jsx';
 import LinkQrPopup from './views/linkQrPopup.jsx';
 import ProofHistory from './views/proofHistory.jsx';
 import OrganizerProfile from './views/organizerProfile.jsx';
+import RequestCredentialUpdate from './views/requestCredentialUpdate.jsx';
+import ReviewCredentialUpdate from './views/reviewCredentialUpdate.jsx';
 
 export const Drawer = () => {
 
@@ -89,6 +91,14 @@ export const Drawer = () => {
       return <OrganizerProfile />;
     }
 
+    if (state?.requestCredentialUpdate === true) {
+      return <RequestCredentialUpdate />;
+    }
+
+    if (state?.reviewCredentialUpdate === true) {
+      return <ReviewCredentialUpdate />;
+    }
+
   };
 
   // Key names an active flag rather than any content from the view itself, so AnimatePresence
@@ -97,6 +107,7 @@ export const Drawer = () => {
   const activeViewKey = [
     'showMidnightWallet', 'createPoap', 'createEvent', 'createIssuer', 'createMint', 'getHolderKey',
     'showSubscribers', 'showBlockchainInfo', 'publishDisclosureRequest', 'showBackup', 'proveOwnership', 'showHolderProofs', 'burnToken', 'showLinkQr', 'showProofHistory', 'showOrganizerProfile',
+    'requestCredentialUpdate', 'reviewCredentialUpdate',
   ].find((flag) => state?.[flag] === true) || 'none';
 
   // CLOSE_DRAWER flips every view flag to false in the same dispatch as `open: false` (see the
@@ -127,6 +138,7 @@ export const Drawer = () => {
   const MODAL_VIEWS = [
     'showMidnightWallet', 'createPoap', 'createEvent', 'createIssuer', 'createMint', 'getHolderKey',
     'showSubscribers', 'showBlockchainInfo', 'publishDisclosureRequest', 'showBackup', 'proveOwnership', 'showHolderProofs', 'burnToken', 'showLinkQr', 'showProofHistory', 'showOrganizerProfile',
+    'requestCredentialUpdate', 'reviewCredentialUpdate',
   ];
   const isModalView = MODAL_VIEWS.includes(chromeViewKey);
   const drawerLayout = isModalView ? 'drawer-modal' : 'drawer-cart';

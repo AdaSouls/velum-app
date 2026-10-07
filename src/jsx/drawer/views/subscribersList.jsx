@@ -1,9 +1,12 @@
-import { X, Award, Flame } from "lucide-react";
+import { useEffect, useState } from "react";
+import { X, Award, Flame, RefreshCw } from "lucide-react";
 import {
   useDrawer,
   useDrawerDispatch,
 } from "../../contexts/drawer/drawer.provider";
 import { useUserRoles } from "../../contexts/user-roles/user-roles.provider";
+import { getCredentialUpdateRequests } from "../../../midnight/indexer.service";
+import { getReissueRecord } from "../../../midnight/reissue-store";
 
 const truncateHex = (hex) => {
   if (!hex) return "N/A";
@@ -23,6 +26,11 @@ const truncateHex = (hex) => {
 //
 // The event's organizer (or the admin) gets a Revoke button on each live token: poap.compact's
 // burn() accepts either, besides the owner. It opens burnToken.jsx's confirmation.
+//
+// Credential update requests (credential-update.ts): the organizer sees which holders asked for an
+// update and reviews each one (reviewCredentialUpdate.jsx). Only the organizer: the request is
+// sealed to their own inbox key. A re-issue this identity left half done (old token burned, new one
+// not minted yet, reissue-store.ts) shows Finish Re-issue on the burned row.
 export default function SubscribersList() {
   const { subscribers, midnight } = useDrawer();
   const dispatch = useDrawerDispatch();
@@ -37,6 +45,40 @@ export default function SubscribersList() {
   const event = subscribers?.event;
   const myPk = midnight?.provider?.address;
   const canRevoke = Boolean(event && myPk) && (isAdmin || myPk === event.issuerPk);
+  const isOrganizer = Boolean(event && myPk) && myPk === event.issuerPk;
+
+  // tokenId → its pending update request, for this event.
+  const [pendingUpdates, setPendingUpdates] = useState({});
+  const issuerPk = event?.issuerPk;
+  const eventId = event?.eventId;
+  useEffect(() => {
+    if (!isOrganizer) return undefined;
+    let cancelled = false;
+    getCredentialUpdateRequests({ issuerPk, status: "pending" })
+      .then((requests) => {
+        if (cancelled) return;
+        const forEvent = requests.filter((request) => request.eventId === eventId);
+        setPendingUpdates(Object.fromEntries(forEvent.map((request) => [String(request.tokenId), request])));
+      })
+      .catch((error) => console.error("Error loading update requests:", error));
+    return () => {
+      cancelled = true;
+    };
+  }, [isOrganizer, issuerPk, eventId]);
+
+  const reviewContext = (token, extra) => ({
+    event,
+    token,
+    eventName: subscribers?.eventName || null,
+    credentialFields: subscribers?.credentialFields || [],
+    ...extra,
+  });
+  const openReview = (token) => {
+    dispatch({ type: "SHOW_REVIEW_UPDATE", payload: reviewContext(token, { request: pendingUpdates[String(token.tokenId)] }) });
+  };
+  const openFinish = (token, record) => {
+    dispatch({ type: "SHOW_REVIEW_UPDATE", payload: reviewContext(token, { resume: record }) });
+  };
 
   const openRevoke = (token) => {
     dispatch({
@@ -82,6 +124,28 @@ export default function SubscribersList() {
                 <span className={`badge flex-shrink-0 ${token.isBurned ? "bg-secondary" : "status-badge-active"}`}>
                   {token.isBurned ? "Burned" : "Active"}
                 </span>
+                {isOrganizer && !token.isBurned && pendingUpdates[String(token.tokenId)] && (
+                  <button
+                    type="button"
+                    className="btn btn-card-detail-action btn-sm flex-shrink-0"
+                    onClick={() => openReview(token)}
+                    aria-label={`Review the update request for POAP #${token.tokenId}`}
+                  >
+                    <RefreshCw size={14} className="mr-1" />
+                    Review Update
+                  </button>
+                )}
+                {isOrganizer && token.isBurned && getReissueRecord(event.eventId, token.tokenId) && (
+                  <button
+                    type="button"
+                    className="btn btn-card-detail-action btn-sm flex-shrink-0"
+                    onClick={() => openFinish(token, getReissueRecord(event.eventId, token.tokenId))}
+                    aria-label={`Finish re-issuing POAP #${token.tokenId}`}
+                  >
+                    <RefreshCw size={14} className="mr-1" />
+                    Finish Re-issue
+                  </button>
+                )}
                 {canRevoke && !token.isBurned && (
                   <button
                     type="button"

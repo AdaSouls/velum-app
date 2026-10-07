@@ -1,5 +1,6 @@
 import {
   deriveEncryptionKeyPair,
+  deriveInboxKeyPair,
   formatHolderCode,
   fromBase64Url,
   openEnvelope,
@@ -26,6 +27,17 @@ describe('deriveEncryptionKeyPair', () => {
     const a = await deriveEncryptionKeyPair(secretKey, organizerA);
     const b = await deriveEncryptionKeyPair(secretKey, organizerB);
     expect(a.publicKeyHex).not.toBe(b.publicKeyHex);
+  });
+});
+
+describe('deriveInboxKeyPair', () => {
+  it('is one key per identity, deterministic, unlike any per-organizer key, and opens what was sealed to it', async () => {
+    const first = await deriveInboxKeyPair(secretKey);
+    expect((await deriveInboxKeyPair(secretKey)).publicKeyHex).toBe(first.publicKeyHex);
+    expect((await deriveInboxKeyPair(new Uint8Array(32).fill(8))).publicKeyHex).not.toBe(first.publicKeyHex);
+    expect((await deriveEncryptionKeyPair(secretKey, organizerA)).publicKeyHex).not.toBe(first.publicKeyHex);
+    const envelope = await sealForRecipient(first.publicKeyHex, new TextEncoder().encode('new DNI'));
+    expect(text(await openEnvelope(envelope, first))).toBe('new DNI');
   });
 });
 

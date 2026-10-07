@@ -36,4 +36,13 @@ describe('OrganizerProfile popup', () => {
     expect(getOrganizerProfile(PK)).toEqual({ name: 'Acme Labs', locality: 'Rosario' });
     expect(screen.getByText(/new events will use these details/i)).toBeInTheDocument();
   });
+
+  it('shows the key holders seal update requests to', async () => {
+    const service = { getInboxKeyPair: jest.fn().mockResolvedValue({ publicKeyHex: 'ef'.repeat(32) }) };
+    renderWithProviders(<OrganizerProfile />, {
+      drawerValue: { ...connected, midnight: { ...connected.midnight, provider: { ...connected.midnight.provider, service } } },
+    });
+    expect(await screen.findByText(/update requests: on/i)).toBeInTheDocument();
+    expect(screen.getByTitle('ef'.repeat(32))).toBeInTheDocument();
+  });
 });

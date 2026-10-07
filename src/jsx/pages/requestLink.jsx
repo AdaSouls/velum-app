@@ -51,7 +51,7 @@ export default function RequestLink() {
   const openRequest = useCallback(() => {
     dispatch({
       type: "PUBLISH_DISCLOSURE_REQUEST",
-      payload: { eventId: found.event.eventId, fields, recipient: link.holderPkHex },
+      payload: { eventId: found.event.eventId, fields, recipient: link.holderPkHex, idCodes: link.idCodes },
     });
   }, [dispatch, found, fields, link]);
 

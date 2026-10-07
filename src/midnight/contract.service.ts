@@ -14,7 +14,7 @@ import {
 } from './providers';
 import { deriveCallerPk, deriveHolderPk, type PoapPrivateState, type TokenRecord } from './witnesses';
 import type { MerkleTreePathArg } from './merkle';
-import { deriveEncryptionKeyPair, type EncryptionKeyPair } from './credential-crypto';
+import { deriveEncryptionKeyPair, deriveInboxKeyPair, type EncryptionKeyPair } from './credential-crypto';
 
 export type PoapProviders = Awaited<ReturnType<typeof buildProviders>>;
 
@@ -74,6 +74,17 @@ export function computeCredentialAttrLeaf(fieldId: Uint8Array, value: Uint8Array
 
 export function computeCredentialLeaf(eventId: Uint8Array, holderPk: Uint8Array, credAttrRoot: Uint8Array): Uint8Array {
   return pureCircuits.computeCredentialLeaf(eventId, holderPk, credAttrRoot);
+}
+
+// Identity documents (flow 12) — the attribute value that ties a credential to one document. Inputs
+// come from identity.ts#identityInputs (each 32 bytes, salt non-zero; the circuit rejects a zero salt).
+export function computeIdentityValue(
+  country: Uint8Array,
+  docType: Uint8Array,
+  number: Uint8Array,
+  salt: Uint8Array,
+): Uint8Array {
+  return pureCircuits.computeIdentityValue(country, docType, number, salt);
 }
 
 export type PoapState = {
@@ -179,6 +190,12 @@ export class PoapContractService {
   // local_sk like holder_pk, so it needs no storage of its own. See credential-crypto.ts.
   async getEncryptionKeyPair(issuerId: Uint8Array): Promise<EncryptionKeyPair> {
     return deriveEncryptionKeyPair(this.privateState.secretKey, issuerId);
+  }
+
+  // X25519 key pair holders seal credential update requests to (credential-update.ts). One per
+  // identity; its public half goes into every Credential event's metadata as updateRequestKey.
+  async getInboxKeyPair(): Promise<EncryptionKeyPair> {
+    return deriveInboxKeyPair(this.privateState.secretKey);
   }
 
   async claim(eventId: Uint8Array, isSoulbound: boolean) {
@@ -359,6 +376,17 @@ export class PoapContractService {
 
   async burn(tokenId: bigint) {
     return this.deployedContract.callTx.burn(tokenId);
+  }
+
+  // Credential update requests (flow 13): the token's holder files (or replaces) a commitment to an
+  // encrypted request sent off-chain (credential-update.ts); its issuer or the admin can dismiss it.
+  // burn() also clears it.
+  async requestCredentialUpdate(tokenId: bigint, payloadCommit: Uint8Array) {
+    return this.deployedContract.callTx.requestCredentialUpdate(tokenId, payloadCommit);
+  }
+
+  async dismissCredentialUpdate(tokenId: bigint) {
+    return this.deployedContract.callTx.dismissCredentialUpdate(tokenId);
   }
 
   async pause() {

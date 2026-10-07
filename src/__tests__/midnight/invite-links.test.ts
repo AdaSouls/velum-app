@@ -46,10 +46,21 @@ describe('invite-links', () => {
     const HOLDER = '11'.repeat(32);
     const url = requestLink('https://app.test', EVENT, HOLDER);
     expect(url).toBe(`https://app.test/app/request#event=${EVENT}&to=${HOLDER}`);
-    expect(parseRequestFragment(new URL(url).hash)).toEqual({ eventIdHex: EVENT, holderPkHex: HOLDER });
+    expect(parseRequestFragment(new URL(url).hash)).toEqual({ eventIdHex: EVENT, holderPkHex: HOLDER, idCodes: {} });
     expect(parseRequestFragment(`#event=${EVENT}`)).toBeNull();
     expect(parseRequestFragment(`#event=${EVENT}&to=${CODE}`)).toBeNull();
     expect(parsePastedInput(url)).toEqual({ kind: 'request', route: `/app/request#event=${EVENT}&to=${HOLDER}` });
+    expect(holderCodeFromInput(url)).toBe(HOLDER);
+  });
+
+  it('carries identity codes (never numbers) and ignores malformed ones', () => {
+    const HOLDER = '11'.repeat(32);
+    const FIELD = '0a'.repeat(32);
+    const SALT = 'ab'.repeat(32);
+    const url = requestLink('https://app.test', EVENT, HOLDER, { [FIELD]: SALT });
+    expect(url).toBe(`https://app.test/app/request#event=${EVENT}&to=${HOLDER}&id=${FIELD}.${SALT}`);
+    expect(parseRequestFragment(new URL(url).hash)?.idCodes).toEqual({ [FIELD]: SALT });
+    expect(parseRequestFragment(`#event=${EVENT}&to=${HOLDER}&id=${FIELD}.zz&id=nope`)?.idCodes).toEqual({});
     expect(holderCodeFromInput(url)).toBe(HOLDER);
   });
 

@@ -12,7 +12,7 @@
 //
 // Tree layout matches poap.compact: leaf_i = computeCredentialAttrLeaf(fieldId, value, rand),
 // depth 8 (MerkleTreePath<8>), padded like createEvent's event-level attribute tree (merkle.ts).
-import { computeCredentialAttrLeaf, computeCredentialLeaf } from './contract.service';
+import { computeCredentialAttrLeaf, computeCredentialLeaf, computeIdentityValue } from './contract.service';
 import { buildMerkleTree, merklePathRootField, type MerkleTreePathArg } from './merkle';
 import { encodeAttributeValue } from './attribute-value-codec';
 import {
@@ -25,6 +25,7 @@ import {
   type SealedEnvelope,
 } from './credential-crypto';
 import { saveCredentialPackage, type CredentialField, type CredentialPackage } from './credential-store';
+import { identityInputs, newIdentitySalt, normalizeDocNumber } from './identity';
 
 const IPFS_API_URL = process.env.REACT_APP_IPFS_API_URL || 'http://localhost:4000';
 const LOOKUP_DOMAIN = new TextEncoder().encode('velum:credential-delivery:v1:');
@@ -32,7 +33,23 @@ const LOOKUP_DOMAIN = new TextEncoder().encode('velum:credential-delivery:v1:');
 const hex = (bytes: Uint8Array) => Buffer.from(bytes).toString('hex');
 const fromHex = (value: string) => Uint8Array.from(Buffer.from(value, 'hex'));
 
-export type CredentialFieldTemplate = { fieldId: string; label: string };
+export type CredentialFieldTemplate = {
+  fieldId: string;
+  label: string;
+  type?: string;
+  country?: string; // identity fields
+  docType?: string;
+};
+
+// An identity field's value: the salted document hash, with the opening the holder keeps.
+export function identityField(template: CredentialFieldTemplate, number: string, saltHex = newIdentitySalt()) {
+  const doc = { country: template.country || '', docType: template.docType || '' };
+  const inputs = identityInputs(doc, number, saltHex);
+  return {
+    valueHex: hex(computeIdentityValue(...inputs)),
+    identity: { ...doc, number: normalizeDocNumber(number), saltHex },
+  };
+}
 
 // ── Building ──────────────────────────────────────────────────────────────────
 
@@ -47,7 +64,8 @@ export async function credentialAttributeTree(fields: CredentialField[]) {
 }
 
 // `values` is keyed by fieldId; empty values are left out (the field just isn't provable for this
-// holder). Returns no root (all-zero) when nothing was filled in.
+// holder). Returns no root (all-zero) when nothing was filled in. Identity fields get a fresh salt
+// each time, so re-issuing a credential also gives the holder a new identity code.
 export async function buildCredentialAttributes(
   template: CredentialFieldTemplate[],
   values: Record<string, string>,
@@ -57,7 +75,9 @@ export async function buildCredentialAttributes(
     .map((field) => ({
       fieldId: field.fieldId,
       label: field.label,
-      valueHex: hex(encodeAttributeValue(values[field.fieldId])),
+      ...(field.type === 'identity'
+        ? identityField(field, values[field.fieldId])
+        : { valueHex: hex(encodeAttributeValue(values[field.fieldId])) }),
       randHex: hex(crypto.getRandomValues(new Uint8Array(32))),
     }));
   if (fields.length === 0) return { fields, root: new Uint8Array(32) };

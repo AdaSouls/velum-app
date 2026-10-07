@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { UserRound, X } from "lucide-react";
+import { Inbox, UserRound, X } from "lucide-react";
 import { useDrawer, useDrawerDispatch } from "../../contexts/drawer/drawer.provider";
 import OrganizationProfileFields from "../../components/OrganizationProfileFields";
 import { getOrganizerProfile, saveOrganizerProfile } from "../../../midnight/organizer-profile";
@@ -11,8 +11,25 @@ export default function OrganizerProfile() {
   const { midnight } = useDrawer();
   const dispatch = useDrawerDispatch();
   const callerPk = midnight?.provider?.address;
+  const service = midnight?.provider?.service;
   const [profile, setProfile] = useState({});
   const [saved, setSaved] = useState(false);
+  const [inboxKey, setInboxKey] = useState(null);
+
+  // The key holders seal credential update requests to (createEvent.jsx puts it in every new
+  // Credential event). Derived from the identity, so it's the same in every browser.
+  useEffect(() => {
+    setInboxKey(null);
+    if (typeof service?.getInboxKeyPair !== "function") return undefined;
+    let cancelled = false;
+    service
+      .getInboxKeyPair()
+      .then((keys) => !cancelled && setInboxKey(keys.publicKeyHex))
+      .catch((error) => console.error("Could not derive the update-request key:", error));
+    return () => {
+      cancelled = true;
+    };
+  }, [service]);
 
   useEffect(() => {
     setProfile(getOrganizerProfile(callerPk) ?? {});
@@ -63,6 +80,17 @@ export default function OrganizerProfile() {
             <button type="submit" className="btn btn-gradient w-100 mt-3">
               Save profile
             </button>
+            {inboxKey && (
+              <div className="info-hint-card mt-3 mb-0">
+                <Inbox size={16} />
+                <p>
+                  <span className="text-white">Update requests: on.</span> Credentials from events you
+                  create can ask you for an update (for example, a new document number), encrypted
+                  so only you can read it. Your key: <span title={inboxKey}>{inboxKey.slice(0, 8)}…{inboxKey.slice(-6)}</span>.
+                  Events created before this don't carry it.
+                </p>
+              </div>
+            )}
           </form>
         )}
       </div>

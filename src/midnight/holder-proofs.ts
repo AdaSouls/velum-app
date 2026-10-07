@@ -7,6 +7,12 @@
 // never publishes anything under their own caller_pk. Attribute requests are always addressed to
 // one holder (their holder_pk under the event's organizer): only that holder can answer, and the
 // request already names them, so that proof hides the value but not who answered.
+//
+// Identity documents (flow 12): a verifier who checked the holder's document asks "is it this one?"
+// with a set of exactly one value, computeIdentityValue(document, salt). Nothing about the value is
+// published (the rule is just { op: 'identity' }), so the holder checks it locally: their own value
+// must rebuild the request's setRoot. The real question (a grade…) comes as a second request from the
+// same verifier; the two are answered together (groupAnswerable), one signature each.
 import { getAllDisclosureRequests, type IndexedDisclosureRequest } from './indexer.service';
 import { buildMerkleTree } from './merkle';
 import { encodeAttributeValue } from './attribute-value-codec';
@@ -16,7 +22,7 @@ import { decodeValueHex, getCredentialPackage, type CredentialPackage } from './
 import { isOwnershipRequest, requestRecipient } from './ownership-proof';
 import { txHashOf } from './tx-result';
 import { fetchRequestRuleCandidates } from './disclosure-sets';
-import { expandRule, ruleAccepts, ruleSize, type CredentialField, type Rule } from './attribute-types';
+import { expandRule, isIdentityField, ruleAccepts, ruleSize, type CredentialField, type Rule } from './attribute-types';
 
 const ZERO_HEX = '0'.repeat(64);
 
@@ -71,9 +77,20 @@ export type AnswerableRequest =
       label: string;
       // null when no published rule could be found for it. `verified` = its set was already checked
       // against the on-chain root; big ranges are checked when the holder proves (see fetchRequestRule).
+      // For an identity request: whether the holder's own document rebuilds the root.
       rule: Rule | null;
       verified: boolean;
     };
+
+const IDENTITY_RULE: Rule = { op: 'identity' };
+
+export const isIdentityRequest = (item: AnswerableRequest) => item.kind === 'attribute' && item.rule?.op === 'identity';
+
+// The one-value set of an identity request. Built from the raw 32-byte value (not text), the same
+// way publishDisclosureRequest.jsx builds it from the number and code it was given.
+export async function identitySetTree(valueHex: string) {
+  return buildMerkleTree([fromHex(valueHex)], 16);
+}
 
 // Plain requests (attendance / ownership) and requests about one of this event's credential
 // fields. Requests about event-level attributes are the organizer's to answer, not the holder's.
@@ -83,6 +100,7 @@ export async function listAnswerableRequests(
   eventIdHex: string,
   credentialFields: CredentialField[],
   holderPkHex: string,
+  pkg: CredentialPackage | null = null,
 ): Promise<AnswerableRequest[]> {
   const me = holderPkHex.toLowerCase();
   const requests = (await getAllDisclosureRequests()).filter((r) => r.eventId === eventIdHex);
@@ -94,6 +112,14 @@ export async function listAnswerableRequests(
       if (!recipient || recipient === me) answerable.push({ kind: 'attendance', request });
     } else if (fields.has(request.fieldId) && recipient === me) {
       const field = fields.get(request.fieldId) as CredentialField;
+      if (isIdentityField(field)) {
+        const own = pkg?.fields.find((f) => f.fieldId === request.fieldId);
+        const matches = own
+          ? hex((await identitySetTree(own.valueHex)).rootBytes) === request.setRoot.toLowerCase()
+          : false;
+        answerable.push({ kind: 'attribute', request, field, label: field.label, rule: IDENTITY_RULE, verified: matches });
+        continue;
+      }
       const found = await fetchRequestRule(request.requestId, request.setRoot).catch(() => null);
       answerable.push({
         kind: 'attribute',
@@ -106,6 +132,30 @@ export async function listAnswerableRequests(
     }
   }
   return answerable;
+}
+
+// Requests to answer together: an identity check and the questions the same verifier asked with it.
+// Everything else stays on its own. Order: identity first, as it was asked.
+export function groupAnswerable(items: AnswerableRequest[]): AnswerableRequest[][] {
+  const withIdentity = new Set(items.filter(isIdentityRequest).map((item) => item.request.verifierPk));
+  const groups = new Map<string, AnswerableRequest[]>();
+  const out: AnswerableRequest[][] = [];
+  for (const item of items) {
+    const verifier = item.request.verifierPk;
+    if (item.kind !== 'attribute' || !withIdentity.has(verifier)) {
+      out.push([item]);
+      continue;
+    }
+    let group = groups.get(verifier);
+    if (!group) {
+      group = [];
+      groups.set(verifier, group);
+      out.push(group);
+    }
+    group.push(item);
+  }
+  out.forEach((group) => group.sort((a, b) => Number(isIdentityRequest(b)) - Number(isIdentityRequest(a))));
+  return out;
 }
 
 // One set tree per rule, shared by the root check and the proof: a range can take seconds to build.
@@ -201,9 +251,13 @@ export async function proveAttribute(
   const attributeTree = await credentialAttributeTree(pkg.fields);
   const attributePath = attributeTree.pathForLeaf(computeCredentialAttrLeaf(fromHex(field.fieldId), value, rand));
 
-  const setTree = await setTreeFor(rule);
+  const setTree = rule.op === 'identity' ? await identitySetTree(field.valueHex) : await setTreeFor(rule);
   if (hex(setTree.rootBytes) !== request.setRoot.toLowerCase()) {
-    throw new Error("The accepted values published for this question don't match it on-chain, so the proof would fail.");
+    throw new Error(
+      rule.op === 'identity'
+        ? "This identity check is for a different document (or identity code) than the one on your credential."
+        : "The accepted values published for this question don't match it on-chain, so the proof would fail.",
+    );
   }
   let setPath;
   try {

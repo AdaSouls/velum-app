@@ -1,5 +1,5 @@
 // Deep links into https://www.midnightexplorer.com/ for the raw on-chain values shown in the
-// "Blockchain Info" popup (see BlockchainInfoModal.jsx). Route shapes taken from the explorer's
+// "Info" popup (see BlockchainInfoModal.jsx). Route shapes taken from the explorer's
 // own client bundle: /blocks/<height>, /transactions/<hash>, /contracts/<address>. Returns
 // undefined for a missing/placeholder value so BlockchainField just renders plain text instead.
 const MIDNIGHT_EXPLORER_BASE_URL = "https://www.midnightexplorer.com";

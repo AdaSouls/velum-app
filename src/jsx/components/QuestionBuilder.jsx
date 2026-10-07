@@ -4,12 +4,15 @@ import {
   DATE_SPAN_AFTER_YEARS,
   DATE_SPAN_BEFORE_YEARS,
   DEFAULT_NUMBER_SPAN,
+  VALIDITY_PERIOD_MONTHS,
   addYears,
+  describePeriod,
   canonicalValue,
   fieldType,
   ruleError,
   ruleSize,
   todayIso,
+  validityPresetRule,
 } from "../../midnight/attribute-types";
 import SelectDropdown from "./SelectDropdown";
 
@@ -33,6 +36,18 @@ const OPS = {
   ],
 };
 
+// A credential's "Valid until" date (validity.ts) gets plain-language questions first, anchored on
+// today (attribute-types.ts#validityPresetRule); the generic date questions stay below them.
+const PRESET_PREFIX = "preset:";
+const VALIDITY_OPS = [
+  { value: `${PRESET_PREFIX}valid`, label: "is still valid (not expired)" },
+  { value: `${PRESET_PREFIX}expired`, label: "has expired" },
+  { value: `${PRESET_PREFIX}expiresWithin`, label: "expires within…" },
+  { value: `${PRESET_PREFIX}validFor`, label: "is valid for at least…" },
+];
+const isValidUntilField = (field) => field?.auto === "validUntil";
+const opsFor = (field) => (isValidUntilField(field) ? [...VALIDITY_OPS, ...OPS.date] : OPS[fieldType(field)]);
+
 const toInt = (raw) => (/^[+-]?\d+$/.test(String(raw).trim()) ? Number(String(raw).trim()) : NaN);
 
 // Builds one question (a rule, attribute-types.ts) about a typed credential field and reports it up
@@ -40,8 +55,10 @@ const toInt = (raw) => (/^[+-]?\d+$/.test(String(raw).trim()) ? Number(String(ra
 // field's own min/max when it has them, otherwise an editable default ("up to", "from").
 export default function QuestionBuilder({ field, onChange }) {
   const type = fieldType(field);
-  const ops = OPS[type];
+  const ops = opsFor(field);
   const [op, setOp] = useState(ops[0].value);
+  const [months, setMonths] = useState("6"); // "expires within" / "valid for at least"
+  const presetKind = op.startsWith(PRESET_PREFIX) ? op.slice(PRESET_PREFIX.length) : null;
   const [values, setValues] = useState(["", ""]); // oneOf (text/number)
   const [picked, setPicked] = useState([]); // oneOf (list)
   const [a, setA] = useState(""); // number: value / from · date: date / from · age: years
@@ -50,7 +67,8 @@ export default function QuestionBuilder({ field, onChange }) {
 
   // A different field (or type) starts a fresh question.
   useEffect(() => {
-    setOp(OPS[fieldType(field)][0].value);
+    setOp(opsFor(field)[0].value);
+    setMonths("6");
     setValues(["", ""]);
     setPicked([]);
     setA("");
@@ -73,12 +91,15 @@ export default function QuestionBuilder({ field, onChange }) {
     return "";
   }, [type, op, a, field]);
   const effectiveBound = bound || defaultBound;
-  const oneSided = (type === "number" && (op === "gte" || op === "lte")) || (type === "date" && op !== "between");
+  const oneSided =
+    !presetKind && ((type === "number" && (op === "gte" || op === "lte")) || (type === "date" && op !== "between"));
 
   const { rule, error } = useMemo(() => {
     try {
       let built = null;
-      if (op === "oneOf") {
+      if (presetKind) {
+        built = validityPresetRule(presetKind, todayIso(), Number(months));
+      } else if (op === "oneOf") {
         const raw = type === "list" ? picked : values.filter((v) => v.trim());
         const canonical = raw.map((v) => {
           const result = canonicalValue(type === "list" ? { ...field, type: "text" } : field, v);
@@ -116,7 +137,7 @@ export default function QuestionBuilder({ field, onChange }) {
     } catch (err) {
       return { rule: null, error: err.message };
     }
-  }, [op, type, field, values, picked, a, b, effectiveBound]);
+  }, [op, presetKind, months, type, field, values, picked, a, b, effectiveBound]);
 
   useEffect(() => {
     onChange(rule, error);
@@ -134,8 +155,33 @@ export default function QuestionBuilder({ field, onChange }) {
             id="questionOp"
             value={op}
             onChange={setOp}
-            options={ops.map((option) => ({ value: option.value, label: `${field.label} ${option.label}` }))}
+            options={ops.map((option) => ({
+              value: option.value,
+              label: `${option.value.startsWith(PRESET_PREFIX) ? "The credential" : field.label} ${option.label}`,
+            }))}
           />
+        </div>
+      )}
+
+      {(presetKind === "expiresWithin" || presetKind === "validFor") && (
+        <div className="col-12">
+          <label className="form-label" htmlFor="questionPeriod">
+            {presetKind === "expiresWithin" ? "Expires within" : "Valid for at least"}
+          </label>
+          <SelectDropdown
+            id="questionPeriod"
+            value={months}
+            onChange={setMonths}
+            options={VALIDITY_PERIOD_MONTHS.map((n) => ({ value: String(n), label: describePeriod(n) }))}
+          />
+        </div>
+      )}
+
+      {presetKind && (
+        <div className="col-12">
+          <small className="form-text text-muted d-block">
+            Counted from today. The holder proves it without revealing the date.
+          </small>
         </div>
       )}
 
@@ -193,7 +239,7 @@ export default function QuestionBuilder({ field, onChange }) {
         </div>
       )}
 
-      {op !== "oneOf" && (
+      {op !== "oneOf" && !presetKind && (
         <div className="col-12">
           <div className="d-flex" style={{ gap: "8px" }}>
             <div className="flex-grow-1">

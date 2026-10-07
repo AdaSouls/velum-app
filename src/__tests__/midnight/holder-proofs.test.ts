@@ -1,5 +1,6 @@
 import {
   fetchRequestRule,
+  groupAnswerable,
   listAnswerableRequests,
   loadCredentialPackage,
   proveAttendance,
@@ -8,7 +9,7 @@ import {
 } from '../../midnight/holder-proofs';
 import { getAllDisclosureRequests } from '../../midnight/indexer.service';
 import { fetchRequestRuleCandidates } from '../../midnight/disclosure-sets';
-import { credentialPathOnChain, fetchDeliveredPackage } from '../../midnight/credential-delivery';
+import { credentialAttributeTree, credentialPathOnChain, fetchDeliveredPackage } from '../../midnight/credential-delivery';
 import { saveCredentialPackage } from '../../midnight/credential-store';
 import { buildMerkleTree } from '../../midnight/merkle';
 
@@ -121,6 +122,67 @@ describe('listAnswerableRequests', () => {
       ['attendance', 'plain-to-me'],
     ]);
     expect(items[1]).toMatchObject({ label: 'Sector', rule: oneOf('Campo', 'Platea'), verified: true });
+  });
+});
+
+describe('identity checks', () => {
+  const ME = 'cc'.repeat(32);
+  const DNI = '0d'.repeat(32);
+  const ID_VALUE = '77'.repeat(32);
+  const VERIFIER = 'ee'.repeat(32);
+  const pkg = {
+    ...PKG,
+    fields: [
+      ...PKG.fields,
+      { fieldId: DNI, label: 'DNI', valueHex: ID_VALUE, randHex: '12'.repeat(32), identity: { country: 'ARG', docType: 'national_id', number: '12345678', saltHex: 'ab'.repeat(32) } },
+    ],
+  };
+  const fields = [
+    { fieldId: SECTOR, label: 'Sector' },
+    { fieldId: DNI, label: 'DNI', type: 'identity' as const, country: 'ARG', docType: 'national_id' },
+  ];
+  // The fake tree's root is the hex of its leaves joined: the one-value identity set's root.
+  const identityRoot = (valueHex: string) => Buffer.from(Buffer.from(valueHex).subarray(0, 32)).toString('hex');
+
+  it("checks an identity request against the holder's own document, without any published values", async () => {
+    (getAllDisclosureRequests as jest.Mock).mockResolvedValue([
+      request({ requestId: 'mine', verifierPk: VERIFIER, fieldId: DNI, setRoot: identityRoot(ID_VALUE), recipientPk: ME }),
+      request({ requestId: 'other-doc', verifierPk: VERIFIER, fieldId: DNI, setRoot: identityRoot('88'.repeat(32)), recipientPk: ME }),
+    ]);
+    const items = await listAnswerableRequests(EVENT, fields, ME, pkg);
+    expect(items.map((i) => [i.request.requestId, i.kind === 'attribute' && i.verified])).toEqual([
+      ['mine', true],
+      ['other-doc', false],
+    ]);
+    expect(items[0]).toMatchObject({ rule: { op: 'identity' } });
+    expect(fetchRequestRuleCandidates).not.toHaveBeenCalled();
+  });
+
+  it('groups an identity check with the questions its verifier asked, identity first', () => {
+    const item = (requestId: string, verifierPk: string, rule: any) =>
+      ({ kind: 'attribute', request: request({ requestId, verifierPk }), field: {}, label: '', rule, verified: true }) as any;
+    const groups = groupAnswerable([
+      item('grade', VERIFIER, oneOf('9')),
+      item('id', VERIFIER, { op: 'identity' }),
+      item('lone', ORGANIZER, oneOf('Campo')),
+    ]);
+    expect(groups.map((g) => g.map((i) => i.request.requestId))).toEqual([['id', 'grade'], ['lone']]);
+  });
+
+  it('proves an identity request with the one-value set', async () => {
+    const service = {
+      getState: jest.fn(async () => ({ ledger: { credentials: {} } })),
+      proveCredentialAttribute: jest.fn(async () => ({ public: { txHash: '0x1' } })),
+    } as any;
+    (credentialPathOnChain as jest.Mock).mockResolvedValue({ cred: true });
+    (credentialAttributeTree as jest.Mock).mockResolvedValue({ pathForLeaf: jest.fn(() => ({ attr: true })) });
+    const req = request({ fieldId: DNI, setRoot: identityRoot(ID_VALUE), recipientPk: ME });
+    await proveAttribute(service, TOKEN, req, { op: 'identity' }, pkg);
+    expect(buildMerkleTree).toHaveBeenCalledWith([Uint8Array.from(Buffer.from(ID_VALUE, 'hex'))], 16);
+    expect(service.proveCredentialAttribute).toHaveBeenCalled();
+
+    const wrong = request({ fieldId: DNI, setRoot: identityRoot('88'.repeat(32)), recipientPk: ME });
+    await expect(proveAttribute(service, TOKEN, wrong, { op: 'identity' }, pkg)).rejects.toThrow(/different document/);
   });
 });
 

@@ -202,6 +202,18 @@ describe('CreateEvent drawer view', () => {
     expect(isPublicMintArg).toBe(false);
   });
 
+  it("puts the organizer's update-request key in a Credential's metadata", async () => {
+    const createEvent = jest.fn().mockResolvedValue({ txHash: '0xabc' });
+    const drawerValue = buildDrawerValue(createEvent);
+    drawerValue.midnight.provider.service.getInboxKeyPair = jest.fn().mockResolvedValue({ publicKeyHex: 'ef'.repeat(32) });
+    renderWithProviders(<CreateEvent />, { drawerValue });
+
+    await fillThroughToSubmit({ categoryLabel: 'Credential', name: 'Diplomas 2026', maxSupply: '0' });
+
+    await waitFor(() => expect(createEvent).toHaveBeenCalled());
+    expect(uploadJSONToIPFS).toHaveBeenCalledWith(expect.objectContaining({ updateRequestKey: 'ef'.repeat(32) }));
+  });
+
   it('on a Credential, private fields are a template: names only, no values and no event-level root', async () => {
     const createEvent = jest.fn().mockResolvedValue({ txHash: '0xabc' });
     renderWithProviders(<CreateEvent />, { drawerValue: buildDrawerValue(createEvent) });

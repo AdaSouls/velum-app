@@ -25,6 +25,8 @@ export function DrawerProvider({ children }) {
     showLinkQr: false,
     showProofHistory: false,
     showOrganizerProfile: false,
+    requestCredentialUpdate: false,
+    reviewCredentialUpdate: false,
     open: false,
     poapEvents: [],
     poapCollection: [],
@@ -112,6 +114,8 @@ function drawerReducer(state, action) {
         showLinkQr: false,
         showProofHistory: false,
         showOrganizerProfile: false,
+        requestCredentialUpdate: false,
+        reviewCredentialUpdate: false,
         open: true
       };
     case 'CREATE_MINT':
@@ -134,6 +138,8 @@ function drawerReducer(state, action) {
         showLinkQr: false,
         showProofHistory: false,
         showOrganizerProfile: false,
+        requestCredentialUpdate: false,
+        reviewCredentialUpdate: false,
         open: true,
         mintEvent: action.payload,
         // Holder code from a mint link (mintLink.jsx), pre-filled as the recipient.
@@ -159,6 +165,8 @@ function drawerReducer(state, action) {
         showLinkQr: false,
         showProofHistory: false,
         showOrganizerProfile: false,
+        requestCredentialUpdate: false,
+        reviewCredentialUpdate: false,
         open: true
       };
     case 'SHOW_SUBSCRIBERS':
@@ -181,6 +189,8 @@ function drawerReducer(state, action) {
         showLinkQr: false,
         showProofHistory: false,
         showOrganizerProfile: false,
+        requestCredentialUpdate: false,
+        reviewCredentialUpdate: false,
         open: true,
         subscribers: action.payload
       };
@@ -204,6 +214,8 @@ function drawerReducer(state, action) {
         showLinkQr: false,
         showProofHistory: false,
         showOrganizerProfile: false,
+        requestCredentialUpdate: false,
+        reviewCredentialUpdate: false,
         open: true,
         blockchainInfo: action.payload
       };
@@ -227,6 +239,8 @@ function drawerReducer(state, action) {
         showLinkQr: false,
         showProofHistory: false,
         showOrganizerProfile: false,
+        requestCredentialUpdate: false,
+        reviewCredentialUpdate: false,
         open: true,
         holderProofsContext: action.payload
       };
@@ -250,6 +264,8 @@ function drawerReducer(state, action) {
         showLinkQr: false,
         showProofHistory: false,
         showOrganizerProfile: false,
+        requestCredentialUpdate: false,
+        reviewCredentialUpdate: false,
         open: true,
         ownershipProof: action.payload
       };
@@ -273,6 +289,8 @@ function drawerReducer(state, action) {
         showLinkQr: false,
         showProofHistory: false,
         showOrganizerProfile: false,
+        requestCredentialUpdate: false,
+        reviewCredentialUpdate: false,
         open: true,
         burnTokenContext: action.payload
       };
@@ -296,6 +314,8 @@ function drawerReducer(state, action) {
         showLinkQr: false,
         showProofHistory: true,
         showOrganizerProfile: false,
+        requestCredentialUpdate: false,
+        reviewCredentialUpdate: false,
         open: true,
         proofHistoryContext: action.payload
       };
@@ -319,6 +339,8 @@ function drawerReducer(state, action) {
         showLinkQr: true,
         showProofHistory: false,
         showOrganizerProfile: false,
+        requestCredentialUpdate: false,
+        reviewCredentialUpdate: false,
         open: true,
         linkQr: action.payload
       };
@@ -342,6 +364,8 @@ function drawerReducer(state, action) {
         showLinkQr: false,
         showProofHistory: false,
         showOrganizerProfile: false,
+        requestCredentialUpdate: false,
+        reviewCredentialUpdate: false,
         open: true
       };
     case 'SHOW_ORGANIZER_PROFILE':
@@ -364,6 +388,8 @@ function drawerReducer(state, action) {
         showLinkQr: false,
         showProofHistory: false,
         showOrganizerProfile: true,
+        requestCredentialUpdate: false,
+        reviewCredentialUpdate: false,
         open: true
       };
     case 'PUBLISH_DISCLOSURE_REQUEST':
@@ -386,8 +412,60 @@ function drawerReducer(state, action) {
         showLinkQr: false,
         showProofHistory: false,
         showOrganizerProfile: false,
+        requestCredentialUpdate: false,
+        reviewCredentialUpdate: false,
         open: true,
         disclosureEvent: action.payload
+      };
+    case 'SHOW_REQUEST_UPDATE':
+      return {
+        ...state,
+        showMidnightWallet: false,
+        createPoap: false,
+        createEvent: false,
+        createIssuer: false,
+        createOwner: false,
+        createMint: false,
+        getHolderKey: false,
+        showSubscribers: false,
+        showBlockchainInfo: false,
+        publishDisclosureRequest: false,
+        showBackup: false,
+        proveOwnership: false,
+        showHolderProofs: false,
+        burnToken: false,
+        showLinkQr: false,
+        showProofHistory: false,
+        showOrganizerProfile: false,
+        requestCredentialUpdate: true,
+        reviewCredentialUpdate: false,
+        open: true,
+        requestUpdateContext: action.payload
+      };
+    case 'SHOW_REVIEW_UPDATE':
+      return {
+        ...state,
+        showMidnightWallet: false,
+        createPoap: false,
+        createEvent: false,
+        createIssuer: false,
+        createOwner: false,
+        createMint: false,
+        getHolderKey: false,
+        showSubscribers: false,
+        showBlockchainInfo: false,
+        publishDisclosureRequest: false,
+        showBackup: false,
+        proveOwnership: false,
+        showHolderProofs: false,
+        burnToken: false,
+        showLinkQr: false,
+        showProofHistory: false,
+        showOrganizerProfile: false,
+        requestCredentialUpdate: false,
+        reviewCredentialUpdate: true,
+        open: true,
+        reviewUpdateContext: action.payload
       };
     case 'CLOSE_DRAWER':
       return {
@@ -409,6 +487,8 @@ function drawerReducer(state, action) {
         showLinkQr: false,
         showProofHistory: false,
         showOrganizerProfile: false,
+        requestCredentialUpdate: false,
+        reviewCredentialUpdate: false,
         open: false
       };
     case 'CREATE_POAP':
@@ -431,6 +511,8 @@ function drawerReducer(state, action) {
         showLinkQr: false,
         showProofHistory: false,
         showOrganizerProfile: false,
+        requestCredentialUpdate: false,
+        reviewCredentialUpdate: false,
         open: true,
         claimEvent: action.payload
       };
@@ -454,6 +536,8 @@ function drawerReducer(state, action) {
         showLinkQr: false,
         showProofHistory: false,
         showOrganizerProfile: false,
+        requestCredentialUpdate: false,
+        reviewCredentialUpdate: false,
         open: true
       };
     case 'CREATE_ISSUER':
@@ -476,6 +560,8 @@ function drawerReducer(state, action) {
         showLinkQr: false,
         showProofHistory: false,
         showOrganizerProfile: false,
+        requestCredentialUpdate: false,
+        reviewCredentialUpdate: false,
         open: true
       };
     case 'CREATE_OWNER':
@@ -498,6 +584,8 @@ function drawerReducer(state, action) {
         showLinkQr: false,
         showProofHistory: false,
         showOrganizerProfile: false,
+        requestCredentialUpdate: false,
+        reviewCredentialUpdate: false,
         open: true
       };
     case 'UPDATE_EVENTS':

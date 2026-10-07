@@ -20,6 +20,11 @@ jest.mock('../../../midnight/indexer.service', () => ({
 jest.mock('../../../midnight/merkle', () => ({
   buildMerkleTree: jest.fn(),
 }));
+// Same reason: the identity check's computeIdentityValue is a pure circuit of the compiled contract.
+jest.mock('../../../midnight/contract.service', () => ({
+  computeIdentityValue: jest.fn(() => new Uint8Array(32).fill(9)),
+}));
+const { computeIdentityValue } = jest.requireMock('../../../midnight/contract.service');
 
 const FIELD = { fieldId: 'cc'.repeat(32), label: 'Region' };
 const EVENT_ID_HEX = 'aa'.repeat(32);
@@ -188,6 +193,86 @@ describe('PublishDisclosureRequest drawer view', () => {
     expect(await screen.findByText(/holds no POAP of this event/i)).toBeInTheDocument();
     expect(getTokensByEvent).toHaveBeenCalledWith(EVENT_ID_HEX, { includeBurned: false });
     expect(screen.getByRole('button', { name: /^publish request$/i })).toBeEnabled();
+  });
+
+  it('asks about a "Valid until" date in plain words, anchored on today', async () => {
+    const publishDisclosureRequest = jest.fn().mockResolvedValue({ private: { result: new Uint8Array(32).fill(0xee) } });
+    const drawerValue = buildDrawerValue({ publishDisclosureRequest });
+    drawerValue.disclosureEvent = {
+      eventId: EVENT_ID_HEX,
+      fields: [{ fieldId: FIELD.fieldId, label: 'Valid until', type: 'date', auto: 'validUntil' }],
+      recipient: RECIPIENT,
+    };
+    renderWithProviders(<PublishDisclosureRequest />, { drawerValue });
+
+    // First question offered: "still valid", no dates to type.
+    expect(screen.queryByLabelText(/^value$/i)).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: /^publish request$/i }));
+
+    await waitFor(() => expect(publishRequestRule).toHaveBeenCalled());
+    const today = new Date().toISOString().slice(0, 10);
+    expect(publishRequestRule.mock.calls[0][1]).toMatchObject({
+      op: 'onOrAfter',
+      type: 'date',
+      from: today,
+      preset: { kind: 'valid', asOf: today },
+    });
+    expect(await screen.findByText(/Still valid \(checked on/)).toBeInTheDocument();
+  });
+
+  describe('identity check', () => {
+    const DNI = { fieldId: '0d'.repeat(32), label: 'DNI', type: 'identity', country: 'ARG', docType: 'national_id' };
+    const SALT = 'ab'.repeat(32);
+
+    it('publishes the identity check and the question to the same holder, the code prefilled from the link', async () => {
+      computeIdentityValue.mockReturnValue(new Uint8Array(32).fill(9));
+      const publishDisclosureRequest = jest
+        .fn()
+        .mockResolvedValueOnce({ private: { result: new Uint8Array(32).fill(0x01) } })
+        .mockResolvedValueOnce({ private: { result: new Uint8Array(32).fill(0x02) } });
+      const drawerValue = buildDrawerValue({ publishDisclosureRequest });
+      drawerValue.disclosureEvent = {
+        eventId: EVENT_ID_HEX,
+        fields: [{ ...FIELD, label: 'Sector' }, DNI],
+        recipient: RECIPIENT,
+        idCodes: { [DNI.fieldId]: SALT },
+      };
+      renderWithProviders(<PublishDisclosureRequest />, { drawerValue });
+
+      expect(screen.getByLabelText(/identity code/i)).toHaveValue(SALT);
+      await userEvent.type(screen.getByLabelText(/number, as seen on the document/i), '12.345.678');
+      await userEvent.type(screen.getAllByLabelText('Candidate value')[0], 'Campo');
+      await userEvent.click(screen.getByRole('button', { name: /^publish request$/i }));
+
+      await waitFor(() => expect(publishDisclosureRequest).toHaveBeenCalledTimes(2));
+      const [country, docType, number, salt] = computeIdentityValue.mock.calls[0];
+      const text = (b) => Buffer.from(b).toString('utf8').replace(/\0+$/, '');
+      expect([text(country), text(docType), text(number)]).toEqual(['ARG', 'national_id', '12345678']);
+      expect(Buffer.from(salt).toString('hex')).toBe(SALT);
+      // The identity set holds that one value.
+      expect(buildMerkleTree.mock.calls[0]).toEqual([[new Uint8Array(32).fill(9)], 16]);
+      const [first, second] = publishDisclosureRequest.mock.calls;
+      expect(first[2]).toEqual(Uint8Array.from(Buffer.from(DNI.fieldId, 'hex')));
+      expect(second[2]).toEqual(Uint8Array.from(Buffer.from(FIELD.fieldId, 'hex')));
+      expect(first[4]).toEqual(second[4]);
+      expect(publishRequestRule).toHaveBeenCalledWith('01'.repeat(32), { op: 'identity' });
+      expect(publishRequestRule).toHaveBeenCalledWith('02'.repeat(32), { op: 'oneOf', values: ['Campo'] });
+      expect(await screen.findByText(/DNI matches the document checked/)).toBeInTheDocument();
+    });
+
+    it('needs the number and a valid code before publishing', async () => {
+      const publishDisclosureRequest = jest.fn();
+      const drawerValue = buildDrawerValue({ publishDisclosureRequest });
+      drawerValue.disclosureEvent = { eventId: EVENT_ID_HEX, fields: [DNI], recipient: RECIPIENT };
+      renderWithProviders(<PublishDisclosureRequest />, { drawerValue });
+
+      const publish = screen.getByRole('button', { name: /^publish request$/i });
+      expect(publish).toBeDisabled();
+      await userEvent.type(screen.getByLabelText(/number, as seen on the document/i), '12345678');
+      await userEvent.type(screen.getByLabelText(/identity code/i), '00'.repeat(32));
+      expect(screen.getByText(/enter the holder's identity code/i)).toBeInTheDocument();
+      expect(publish).toBeDisabled();
+    });
   });
 
   it('dispatches CLOSE_DRAWER when the close button is clicked', async () => {

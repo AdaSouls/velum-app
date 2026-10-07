@@ -335,6 +335,51 @@ app.get('/api/credential-delivery/:lookupId', async (req, res) => {
   }
 });
 
+// ── Credential update requests ─────────────────────────────────────────────────
+//
+// A holder asking the organizer to re-issue a credential (src/midnight/credential-update.ts) seals
+// the request for the organizer's inbox key and posts it here, keyed by payloadCommit = sha256 of
+// the envelope — the same value requestCredentialUpdate puts on-chain, so the organizer finds it
+// from the indexer's pending list. Anyone can post under a commitment; the organizer's browser keeps
+// only an envelope whose own hash is the commitment and that opens with its key.
+const UPDATE_KEYVALUE = 'velumUpdateRequest';
+
+app.post('/api/credential-update', async (req, res) => {
+  try {
+    const { payloadCommit, envelope } = req.body ?? {};
+    if (typeof payloadCommit !== 'string' || !LOOKUP_ID_PATTERN.test(payloadCommit)) {
+      res.status(400).json({ error: 'Expected a 32-byte hex "payloadCommit"' });
+      return;
+    }
+    if (envelope?.format !== 'velum-credential' || typeof envelope.ciphertext !== 'string') {
+      res.status(400).json({ error: 'Expected an encrypted Velum envelope' });
+      return;
+    }
+    const blob = new Blob([JSON.stringify(envelope)], { type: 'application/json' });
+    await pinToIpfs(blob, `velum-update-${payloadCommit}.json`, 'private', { [UPDATE_KEYVALUE]: payloadCommit });
+    res.json({ ok: true });
+  } catch (error) {
+    console.error('[ipfs-server] update request upload failed:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/credential-update/:payloadCommit', async (req, res) => {
+  try {
+    const { payloadCommit } = req.params;
+    if (!LOOKUP_ID_PATTERN.test(payloadCommit)) {
+      res.status(400).json({ error: 'Expected a 32-byte hex payloadCommit' });
+      return;
+    }
+    const files = (await listPrivateFiles(UPDATE_KEYVALUE, payloadCommit)).slice(0, MAX_CANDIDATES);
+    const envelopes = await Promise.all(files.map((file) => downloadPrivateJson(file.cid).catch(() => null)));
+    res.json({ envelopes: envelopes.filter(Boolean) });
+  } catch (error) {
+    console.error('[ipfs-server] update request fetch failed:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // ── Disclosure request sets ────────────────────────────────────────────────────
 //
 // A disclosure request only puts the ROOT of its accepted-values set on-chain. Whoever answers
@@ -352,6 +397,8 @@ const RANGE_OPS = { number: ['gte', 'lte', 'between'], date: ['onOrAfter', 'onOr
 
 function validRule(rule) {
   if (!rule || typeof rule !== 'object' || JSON.stringify(rule).length > MAX_RULE_BYTES) return false;
+  // An identity check (src/midnight/identity.ts): only the kind of question, never the document.
+  if (rule.op === 'identity') return Object.keys(rule).length === 1;
   if (rule.op === 'oneOf') {
     return (
       Array.isArray(rule.values) &&

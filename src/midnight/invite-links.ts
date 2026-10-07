@@ -45,16 +45,35 @@ export function parseMintFragment(hash: string): { holderCode: string; eventIdHe
 //    credential: /app/request#event=<eventId>&to=<holder pk>. Opening it opens Ask for a Disclosure
 //    with both filled in (requestLink.jsx). The holder pk is their pseudonym under the event's
 //    organizer, already public as their token's owner.
-export function requestLink(origin: string, eventIdHex: string, holderPkHex: string): string {
-  return `${origin}/app/request#event=${eventIdHex}&to=${holderPkHex}`;
+//    When the credential carries identity documents, the link also carries each one's identity
+//    code: &id=<fieldId>.<salt>. Never the document number — the verifier types the one they see on
+//    the document, so a classmate's link (their code, their document) can't pass for the holder's.
+//    Unlike the rest, the code is personal: with it and the number, anyone can link this credential
+//    to its holder (identity.ts). It still can't answer for them.
+export type IdentityCodes = Record<string, string>; // fieldId → salt, both hex
+
+export function requestLink(origin: string, eventIdHex: string, holderPkHex: string, idCodes: IdentityCodes = {}): string {
+  const ids = Object.entries(idCodes)
+    .map(([fieldId, salt]) => `&id=${fieldId}.${salt}`)
+    .join('');
+  return `${origin}/app/request#event=${eventIdHex}&to=${holderPkHex}${ids}`;
 }
 
-export function parseRequestFragment(hash: string): { eventIdHex: string; holderPkHex: string } | null {
+export function parseRequestFragment(
+  hash: string,
+): { eventIdHex: string; holderPkHex: string; idCodes: IdentityCodes } | null {
   const params = fragmentParams(hash);
   const event = params.get('event') || '';
   const to = params.get('to') || '';
   if (!HEX_64.test(event) || !HEX_64.test(to)) return null;
-  return { eventIdHex: event.toLowerCase(), holderPkHex: to.toLowerCase() };
+  const idCodes: IdentityCodes = {};
+  params.getAll('id').forEach((entry) => {
+    const [fieldId, salt, ...rest] = entry.split('.');
+    if (!rest.length && HEX_64.test(fieldId || '') && HEX_64.test(salt || '')) {
+      idCodes[fieldId.toLowerCase()] = salt.toLowerCase();
+    }
+  });
+  return { eventIdHex: event.toLowerCase(), holderPkHex: to.toLowerCase(), idCodes };
 }
 
 export type PastedInput =

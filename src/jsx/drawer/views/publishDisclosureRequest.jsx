@@ -16,10 +16,12 @@ import { requestRecipient } from "../../../midnight/ownership-proof";
 import { parseHolderCode } from "../../../midnight/credential-crypto";
 import { holderCodeFromInput } from "../../../midnight/invite-links";
 import { publishRequestRule } from "../../../midnight/disclosure-sets";
-import { describeRule, expandRule, ruleSize } from "../../../midnight/attribute-types";
+import { describeRule, expandRule, isIdentityField, ruleSize } from "../../../midnight/attribute-types";
 import QuestionBuilder from "../../components/QuestionBuilder";
 import SelectDropdown from "../../components/SelectDropdown";
 import { friendlyErrorMessage } from "../../../midnight/friendly-error";
+import { checkDocNumber, documentLabel, identityInputs, isValidSalt } from "../../../midnight/identity";
+import { computeIdentityValue } from "../../../midnight/contract.service";
 
 const REQUEST_ID_POLL_ATTEMPTS = 10;
 const REQUEST_ID_POLL_DELAY_MS = 1500;
@@ -58,12 +60,42 @@ async function pollForRequestId({ verifierPkHex, eventIdHex, fieldIdHex, setRoot
 // this event's organizer, which they copy from Prove a Private Detail on their POAP. The contract
 // rejects proveCredentialAttribute on an open request and lets only the recipient answer, so a
 // classmate can't answer in the applicant's place (AdaSouls/velum f6f6114).
+//
+// Identity check (AdaSouls/velum 0e37df6, flow 12): addressing alone doesn't stop the applicant from
+// handing over a qualifying friend's key. When the credential carries an identity document, the
+// asker types the number on the document they checked plus the holder's identity code (prefilled
+// from the request link), and a second request asks "is it this document?" — a set of one value,
+// computeIdentityValue(...). Both requests go to the same holder; a holder has one credential per
+// event, so both proofs are about the same credential. Two signatures, published in a row.
 export default function PublishDisclosureRequest() {
   const { midnight, disclosureEvent } = useDrawer();
   const dispatch = useDrawerDispatch();
 
-  const fields = disclosureEvent?.fields || [];
+  const allFields = disclosureEvent?.fields || [];
+  // Identity documents get their own section; QuestionBuilder handles the rest (ranges, lists…).
+  const fields = allFields.filter((field) => !isIdentityField(field));
+  const identityFields = allFields.filter(isIdentityField);
   const [fieldId, setFieldId] = useState(fields[0]?.fieldId || "");
+  const [askQuestion, setAskQuestion] = useState(fields.length > 0);
+  const [checkIdentity, setCheckIdentity] = useState(identityFields.length > 0);
+  const [identityFieldId, setIdentityFieldId] = useState(identityFields[0]?.fieldId || "");
+  const [docNumber, setDocNumber] = useState("");
+  const [idCode, setIdCode] = useState(disclosureEvent?.idCodes?.[identityFields[0]?.fieldId] || "");
+  const identityField = identityFields.find((field) => field.fieldId === identityFieldId);
+  const numberCheck = checkDocNumber(docNumber);
+  const identityProblem = !checkIdentity
+    ? null
+    : "error" in numberCheck
+      ? numberCheck.error
+      : !numberCheck.value
+        ? "Enter the number on the document you checked."
+        : !isValidSalt(idCode.trim().toLowerCase())
+          ? "Enter the holder's identity code (it comes in their link)."
+          : null;
+  const pickIdentityField = (id) => {
+    setIdentityFieldId(id);
+    setIdCode(disclosureEvent?.idCodes?.[id] || "");
+  };
   const [rule, setRule] = useState(null);
   const [ruleProblem, setRuleProblem] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -98,78 +130,113 @@ export default function PublishDisclosureRequest() {
     dispatch({ type: "CLOSE_DRAWER" });
   };
 
+  // One publishDisclosureRequest transaction + its question for holders. Returns the request id.
+  const publishOne = async ({ title, fieldIdHex, setRootBytes, rule: question }) => {
+    const setRootHex = Buffer.from(setRootBytes).toString("hex");
+    const label = new Uint8Array(32);
+    crypto.getRandomValues(label);
+    loadingFunction(title, "Preparing transaction…", "");
+    const publishedTx = await midnight.provider.service.publishDisclosureRequest(
+      label,
+      Uint8Array.from(Buffer.from(disclosureEvent.eventId, "hex")),
+      Uint8Array.from(Buffer.from(fieldIdHex, "hex")),
+      setRootBytes,
+      Uint8Array.from(Buffer.from(recipientPkHex, "hex")),
+    );
+
+    // The circuit returns the requestId (private.result); the indexer poll stays as a fallback.
+    const returned = publishedTx?.private?.result;
+    let requestId = returned instanceof Uint8Array && returned.length === 32 ? Buffer.from(returned).toString("hex") : null;
+    if (!requestId) {
+      loadingFunction(title, "Waiting for the indexer to pick it up…", "");
+      requestId = await pollForRequestId({
+        verifierPkHex: midnight.provider.address,
+        eventIdHex: disclosureEvent.eventId,
+        fieldIdHex,
+        setRootHex,
+        recipientPkHex,
+      });
+    }
+    if (!requestId) {
+      throw new Error("Published, but the indexer hasn't shown it yet. Publish the request again shortly.");
+    }
+
+    // Holders answer from their card, so they need the question — the chain only has the root. For
+    // an identity check that's just { op: 'identity' }: the value stays between asker and holder.
+    loadingFunction(title, "Publishing the question…", "");
+    try {
+      await publishRequestRule(requestId, question);
+    } catch (setError) {
+      console.error("Publishing the accepted values failed:", setError);
+      throw new Error(
+        "The request is on-chain, but its question couldn't be published, so the holder can't answer it. Publish the request again.",
+      );
+    }
+    return requestId;
+  };
+
   const handlePublish = async (e) => {
     e.preventDefault();
-    if (!midnight?.provider || !disclosureEvent?.eventId || !fieldId) return;
+    if (!midnight?.provider || !disclosureEvent?.eventId) return;
 
     if (!recipientPkHex) {
       errorFunction("Validation Error", "Paste the key of the holder this question is for.", "");
       return;
     }
-    if (!rule) {
+    if (!askQuestion && !checkIdentity) {
+      errorFunction("Validation Error", "Choose what to ask.", "");
+      return;
+    }
+    if (checkIdentity && identityProblem) {
+      errorFunction("Validation Error", identityProblem, "");
+      return;
+    }
+    if (askQuestion && !rule) {
       errorFunction("Validation Error", ruleProblem || "Complete the question first.", "");
       return;
     }
 
+    const total = (checkIdentity ? 1 : 0) + (askQuestion ? 1 : 0);
+    const titleFor = (n) => `Publishing Disclosure Request${total > 1 ? ` (${n} of ${total})` : ""}`;
+    const done = [];
     setLoading(true);
     setPublished(null);
     try {
-      if (ruleSize(rule) > 2000) {
-        loadingFunction("Publishing Disclosure Request", `Building the ${ruleSize(rule).toLocaleString()} accepted values…`, "");
-      }
-      const tree = await buildMerkleTree(expandRule(rule).map(encodeAttributeValue), 16);
-      const setRootHex = Buffer.from(tree.rootBytes).toString("hex");
-
-      const label = new Uint8Array(32);
-      crypto.getRandomValues(label);
-      const eventIdBytes = Uint8Array.from(Buffer.from(disclosureEvent.eventId, "hex"));
-      const fieldIdBytes = Uint8Array.from(Buffer.from(fieldId, "hex"));
-
-      loadingFunction("Publishing Disclosure Request", "Preparing transaction…", "");
-      const publishedTx = await midnight.provider.service.publishDisclosureRequest(
-        label,
-        eventIdBytes,
-        fieldIdBytes,
-        tree.rootBytes,
-        Uint8Array.from(Buffer.from(recipientPkHex, "hex")),
-      );
-
-      // The circuit returns the requestId (private.result); the indexer poll stays as a fallback.
-      const returned = publishedTx?.private?.result;
-      let requestId = returned instanceof Uint8Array && returned.length === 32 ? Buffer.from(returned).toString("hex") : null;
-      if (!requestId) {
-        loadingFunction("Publishing Disclosure Request", "Waiting for the indexer to pick it up…", "");
-        requestId = await pollForRequestId({
-          verifierPkHex: midnight.provider.address,
-          eventIdHex: disclosureEvent.eventId,
-          fieldIdHex: fieldId,
-          setRootHex,
-          recipientPkHex,
+      if (checkIdentity) {
+        const value = computeIdentityValue(...identityInputs(identityField, numberCheck.value, idCode.trim().toLowerCase()));
+        const tree = await buildMerkleTree([value], 16);
+        await publishOne({
+          title: titleFor(1),
+          fieldIdHex: identityField.fieldId,
+          setRootBytes: tree.rootBytes,
+          rule: { op: "identity" },
         });
+        done.push(describeRule(identityField.label, { op: "identity" }));
       }
-      if (!requestId) {
-        throw new Error("Published, but the indexer hasn't shown it yet. Publish the request again shortly.");
+      if (askQuestion) {
+        const title = titleFor(done.length + 1);
+        if (ruleSize(rule) > 2000) {
+          loadingFunction(title, `Building the ${ruleSize(rule).toLocaleString()} accepted values…`, "");
+        }
+        const tree = await buildMerkleTree(expandRule(rule).map(encodeAttributeValue), 16);
+        await publishOne({ title, fieldIdHex: fieldId, setRootBytes: tree.rootBytes, rule });
+        done.push(describeRule(selectedField?.label || "Value", rule));
       }
-
-      // Holders answer from their card, so they need the accepted values — the chain only has the root.
-      loadingFunction("Publishing Disclosure Request", "Publishing the accepted values…", "");
-      try {
-        await publishRequestRule(requestId, rule);
-      } catch (setError) {
-        console.error("Publishing the accepted values failed:", setError);
-        throw new Error(
-          "The request is on-chain, but its accepted values couldn't be published, so holders can't answer it. Publish the request again.",
-        );
-      }
-      setPublished(describeRule(selectedField?.label || "Value", rule));
+      setPublished(done);
       succesfullBlockchainCreation(
-        "Disclosure Request Published",
-        "The holder can now answer it from their POAP (Prove a Private Detail).",
+        done.length > 1 ? "Disclosure Requests Published" : "Disclosure Request Published",
+        "The holder can now answer from their POAP (Prove a Private Detail).",
         "",
       );
     } catch (error) {
       console.error("Error publishing disclosure request:", error);
-      errorFunction("Error", friendlyErrorMessage(error, "Failed to publish the disclosure request. Please try again."), "");
+      const message = friendlyErrorMessage(error, "Failed to publish the disclosure request. Please try again.");
+      errorFunction(
+        "Error",
+        done.length ? `“${done[0]}” was published; the next request failed. ${message}` : message,
+        "",
+      );
+      if (done.length) setPublished(done);
     } finally {
       setLoading(false);
     }
@@ -189,7 +256,7 @@ export default function PublishDisclosureRequest() {
           <div className="alert alert-info" role="alert">
             Connect your wallet first to publish a disclosure request.
           </div>
-        ) : fields.length === 0 ? (
+        ) : allFields.length === 0 ? (
           <div className="alert alert-info" role="alert">
             This event has no private attributes to ask about.
           </div>
@@ -221,23 +288,126 @@ export default function PublishDisclosureRequest() {
               </small>
             </div>
 
-            <div className="col-12">
-              <label className="form-label" htmlFor="disclosureField">Attribute</label>
-              <SelectDropdown
-                id="disclosureField"
-                value={fieldId}
-                onChange={setFieldId}
-                options={fields.map((field) => ({ value: field.fieldId, label: field.label }))}
-              />
-            </div>
+            {identityFields.length > 0 && (
+              <>
+                <div className="col-12">
+                  <div className="form-check form-switch share-toggle-row">
+                    <input
+                      className="form-check-input"
+                      type="checkbox"
+                      id="checkIdentity"
+                      checked={checkIdentity}
+                      onChange={(event) => setCheckIdentity(event.target.checked)}
+                    />
+                    <label className="form-check-label" htmlFor="checkIdentity">
+                      Identity check: the credential is theirs
+                    </label>
+                  </div>
+                </div>
+                {checkIdentity && (
+                  <>
+                    {identityFields.length > 1 && (
+                      <div className="col-12">
+                        <label className="form-label" htmlFor="identityField">Document</label>
+                        <SelectDropdown
+                          id="identityField"
+                          value={identityFieldId}
+                          onChange={pickIdentityField}
+                          options={identityFields.map((field) => ({
+                            value: field.fieldId,
+                            label: `${field.label} (${documentLabel(field)})`,
+                          }))}
+                        />
+                      </div>
+                    )}
+                    <div className="col-12">
+                      <label className="form-label" htmlFor="identityNumber">
+                        {identityField ? documentLabel(identityField) : "Document"} number, as seen on the document
+                      </label>
+                      <input
+                        id="identityNumber"
+                        type="text"
+                        className="form-control"
+                        autoComplete="off"
+                        value={docNumber}
+                        onChange={(event) => setDocNumber(event.target.value)}
+                      />
+                    </div>
+                    <div className="col-12">
+                      <label className="form-label" htmlFor="identityCode">Holder's identity code</label>
+                      <input
+                        id="identityCode"
+                        type="text"
+                        className="form-control"
+                        autoComplete="off"
+                        placeholder="Comes in the holder's link"
+                        value={idCode}
+                        onChange={(event) => setIdCode(event.target.value)}
+                      />
+                      {identityProblem && (docNumber.trim() || idCode.trim()) && (
+                        <small className="form-text text-danger d-block">{identityProblem}</small>
+                      )}
+                      <small className="form-text text-muted">
+                        Check the person's document yourself and type its number. Only you and the
+                        holder can tell which document this is: the number is never published. If
+                        the credential was issued for someone else's document, the holder can't
+                        answer.
+                      </small>
+                    </div>
+                  </>
+                )}
+              </>
+            )}
 
-            {selectedField && <QuestionBuilder field={selectedField} onChange={onQuestionChange} />}
+            {fields.length > 0 && (
+              <>
+                {identityFields.length > 0 && (
+                  <div className="col-12">
+                    <div className="form-check form-switch share-toggle-row">
+                      <input
+                        className="form-check-input"
+                        type="checkbox"
+                        id="askQuestion"
+                        checked={askQuestion}
+                        onChange={(event) => setAskQuestion(event.target.checked)}
+                      />
+                      <label className="form-check-label" htmlFor="askQuestion">
+                        Ask about a private detail
+                      </label>
+                    </div>
+                  </div>
+                )}
+                {askQuestion && (
+                  <>
+                    <div className="col-12">
+                      <label className="form-label" htmlFor="disclosureField">Attribute</label>
+                      <SelectDropdown
+                        id="disclosureField"
+                        value={fieldId}
+                        onChange={setFieldId}
+                        options={fields.map((field) => ({ value: field.fieldId, label: field.label }))}
+                      />
+                    </div>
+
+                    {selectedField && <QuestionBuilder field={selectedField} onChange={onQuestionChange} />}
+                  </>
+                )}
+              </>
+            )}
+
+            {checkIdentity && askQuestion && (
+              <div className="col-12">
+                <small className="form-text text-muted d-block">
+                  Two requests, one signature each. The holder answers both together.
+                </small>
+              </div>
+            )}
 
             {published && (
               <div className="col-12 mt-2">
                 <div className="alert alert-success m-0" role="status">
-                  Published: “{published}”. If their value fits, the holder can prove it from their POAP
-                  card (Prove a Private Detail), without revealing it.
+                  Published: {published.map((text) => `“${text}”`).join(" and ")}. If it fits, the holder
+                  can prove it from their POAP card (Prove a Private Detail), without revealing it.
                 </div>
               </div>
             )}
@@ -245,13 +415,19 @@ export default function PublishDisclosureRequest() {
         )}
       </div>
 
-      {midnight?.provider && fields.length > 0 && (
+      {midnight?.provider && allFields.length > 0 && (
         <div className="drawer-footer">
           <button
             type="submit"
             className="btn btn-gradient btn-block"
             onClick={handlePublish}
-            disabled={loading || !rule || !recipient}
+            disabled={
+              loading ||
+              !recipient ||
+              (!askQuestion && !checkIdentity) ||
+              (askQuestion && !rule) ||
+              Boolean(checkIdentity && identityProblem)
+            }
           >
             {loading ? "Publishing…" : "Publish Request"}
           </button>

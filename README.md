@@ -33,15 +33,20 @@ across organizers, and holders can prove things about a credential without showi
 
 **Organizers:**
 - Create events with a step-by-step wizard: capacity, deadline, validity period, taxonomy, and
-  typed private fields (text, integer with range, date, list).
+  typed private fields (text, integer with range, date, list, identity document).
 - Invite holders with a link or QR code, and issue credentials with each holder's private values.
 - See their holders, revoke credentials, and ask holders questions about private data ("is one of…",
   "≥", "between", "at least N years ago").
+- Tie a credential to the holder's identity document, so a verifier who checks the document can
+  tell the credential is theirs (no answering with a friend's).
+- Review holders' update requests (e.g. a new document number) and re-issue in guided steps.
 
 **Holders:**
 - Explore and claim events, and see all their credentials in one place.
 - Prove ownership publicly or anonymously ("Anonymous among N holders", with a warning below 5).
-- Answer an organizer's question about a private detail without revealing the value.
+- Answer an organizer's question about a private detail without revealing the value, together with
+  an identity check when the credential carries a document.
+- Ask the organizer to update a credential, encrypted so only the organizer can read it.
 - Keep a receipt and a history of every proof, and share a public collection page.
 
 **Verifiers:** `/app/verify` checks a proof from its link or hash, with no account and no wallet.
@@ -76,7 +81,8 @@ npm start              # http://localhost:3000
 | `REACT_APP_MIDNIGHT_ZK_CONFIG_PATH` | Optional. Where the ZK keys are served from (default `/midnight/poap`). Only for a local devnet running an older contract; never set on Vercel |
 
 **IPFS proxy (`server/`):** a small Express server that keeps the Pinata key out of the browser
-bundle. It handles event metadata and encrypted backups.
+bundle. It handles event metadata, encrypted backups, encrypted credential delivery, disclosure
+request questions and encrypted credential update requests (`/api/credential-update`).
 
 ```bash
 cd server

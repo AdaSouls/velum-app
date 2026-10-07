@@ -3,6 +3,8 @@ import { X, EyeOff, ShieldCheck, Users, Info, Copy, Check, Link2 } from "lucide-
 import { useDrawer, useDrawerDispatch } from "../../contexts/drawer/drawer.provider";
 import { errorFunction, loadingFunction, succesfullBlockchainCreation } from "../../toasts/sweetAlerts";
 import {
+  groupAnswerable,
+  isIdentityRequest,
   listAnswerableRequests,
   proveAttendance,
   proveAttribute,
@@ -52,6 +54,20 @@ const questionFor = (item) =>
       ? describeRule(item.label, item.rule)
       : `${item.label} (accepted values not published)`;
 
+// Why this request can't be answered right now, or null.
+function reasonFor(item, pkg) {
+  if (item.kind !== "attribute") return null;
+  const hasValue = Boolean(pkg?.fields.some((f) => f.fieldId === item.request.fieldId));
+  if (isIdentityRequest(item)) {
+    if (!hasValue) return "Your credential has no document for this check.";
+    return item.verified ? null : "This identity check doesn't match the document on your credential.";
+  }
+  if (!item.rule) return "The accepted values for this question aren't available.";
+  if (!hasValue) return "Your credential has no value for this field.";
+  if (!valueQualifies(pkg, item.request.fieldId, item.rule)) return "Your value isn't one of the accepted ones.";
+  return null;
+}
+
 // Big ranges take a few seconds to turn into the set the proof needs (attribute-types.ts).
 const SLOW_SET_SIZE = 2000;
 
@@ -90,13 +106,14 @@ export default function HolderProofs() {
   const [items, setItems] = useState(null);
   const [loadError, setLoadError] = useState(null);
   const [busyId, setBusyId] = useState(null);
-  const [receipt, setReceipt] = useState(null);
+  const [receipts, setReceipts] = useState(null); // one per proof, after answering
+  const [step, setStep] = useState(null); // "1 of 2" while a group is being answered
   const [holders, setHolders] = useState(null);
 
   useEffect(() => {
     if (!ctx || !service) return undefined;
     let cancelled = false;
-    listAnswerableRequests(ctx.token.eventId, ctx.credentialFields || [], ctx.token.holderPk)
+    listAnswerableRequests(ctx.token.eventId, ctx.credentialFields || [], ctx.token.holderPk, ctx.pkg)
       .then((found) => {
         if (!cancelled) setItems(found.filter((item) => item.kind === mode.kind));
       })
@@ -125,38 +142,58 @@ export default function HolderProofs() {
 
   const closeDrawer = () => dispatch({ type: "CLOSE_DRAWER" });
 
-  const answer = async (item) => {
-    setBusyId(item.request.requestId);
+  // Answers every request of a group in turn — one signature each. A group is a single request, or
+  // an identity check plus the questions its verifier asked with it (holder-proofs.ts).
+  const answer = async (group) => {
+    const groupId = group[0].request.requestId;
+    setBusyId(groupId);
+    const done = [];
     try {
-      if (item.kind === "attribute" && ruleSize(item.rule) > SLOW_SET_SIZE) {
-        loadingFunction(PROGRESS_TITLE, `Building the ${ruleSize(item.rule).toLocaleString()} accepted values…`, "");
-        await setTreeFor(item.rule); // cached: proveAttribute reuses it
+      for (const [index, item] of group.entries()) {
+        const label = group.length > 1 ? ` (${index + 1} of ${group.length})` : "";
+        setStep(group.length > 1 ? `${index + 1} of ${group.length}` : null);
+        if (item.kind === "attribute" && !isIdentityRequest(item) && ruleSize(item.rule) > SLOW_SET_SIZE) {
+          loadingFunction(PROGRESS_TITLE + label, `Building the ${ruleSize(item.rule).toLocaleString()} accepted values…`, "");
+          await setTreeFor(item.rule); // cached: proveAttribute reuses it
+        }
+        loadingFunction(PROGRESS_TITLE + label, "Preparing transaction…", "");
+        const { txHash } =
+          item.kind === "attendance"
+            ? await proveAttendance(service, ctx.token, item.request.requestId, ctx.pkg)
+            : await proveAttribute(service, ctx.token, item.request, item.rule, ctx.pkg);
+        const record = {
+          kind: item.kind === "attendance" ? "proveEventAttendance" : "proveCredentialAttribute",
+          question: questionFor(item),
+          txHash,
+          provenAt: new Date(),
+        };
+        done.push(record);
+        // Kept in this browser only: nothing on-chain links an attendance proof back to the token (an
+        // attribute proof does name its holder, through the addressed request).
+        addProofRecord(ctx.token.holderPk, ctx.token.tokenId, {
+          ...record,
+          txHash: txHash ?? null,
+          provenAt: record.provenAt.toISOString(),
+        });
       }
-      loadingFunction(PROGRESS_TITLE, "Preparing transaction…", "");
-      const { txHash } =
-        item.kind === "attendance"
-          ? await proveAttendance(service, ctx.token, item.request.requestId, ctx.pkg)
-          : await proveAttribute(service, ctx.token, item.request, item.rule, ctx.pkg);
-      const record = {
-        kind: item.kind === "attendance" ? "proveEventAttendance" : "proveCredentialAttribute",
-        question: questionFor(item),
-        txHash,
-        provenAt: new Date(),
-      };
-      setReceipt(record);
-      // Kept in this browser only: nothing on-chain links an attendance proof back to the token (an
-      // attribute proof does name its holder, through the addressed request).
-      addProofRecord(ctx.token.holderPk, ctx.token.tokenId, {
-        ...record,
-        txHash: txHash ?? null,
-        provenAt: record.provenAt.toISOString(),
-      });
-      succesfullBlockchainCreation("Proof Submitted", txHash ? `Transaction: ${txHash}` : "", "");
+      setReceipts(done);
+      succesfullBlockchainCreation(
+        done.length > 1 ? "Proofs Submitted" : "Proof Submitted",
+        done.length === 1 && done[0].txHash ? `Transaction: ${done[0].txHash}` : "",
+        "",
+      );
     } catch (error) {
       console.error("Error proving:", error);
-      errorFunction("Error", friendlyErrorMessage(error, "The proof failed. Please try again."), "");
+      const message = friendlyErrorMessage(error, "The proof failed. Please try again.");
+      errorFunction(
+        "Error",
+        done.length ? `${done.length} of ${group.length} proofs went through. ${message}` : message,
+        "",
+      );
+      if (done.length) setReceipts(done);
     } finally {
       setBusyId(null);
+      setStep(null);
     }
   };
 
@@ -166,9 +203,15 @@ export default function HolderProofs() {
   // The request link carries the key plus this event, so someone other than the organizer can open
   // Ask for a Disclosure straight from it (requestLink.jsx) — Credential events aren't listed anywhere
   // else they could reach.
+  // With identity documents, the link also carries their identity codes (never the numbers).
+  const idCodes = Object.fromEntries(
+    (ctx?.pkg?.fields || []).filter((field) => field.identity).map((field) => [field.fieldId, field.identity.saltHex]),
+  );
+  const linkHasCodes = Object.keys(idCodes).length > 0;
   const [copied, setCopied] = useState(null); // "key" | "link"
   const copy = async (what) => {
-    const text = what === "link" ? requestLink(window.location.origin, ctx.token.eventId, ctx.token.holderPk) : ctx.token.holderPk;
+    const text =
+      what === "link" ? requestLink(window.location.origin, ctx.token.eventId, ctx.token.holderPk, idCodes) : ctx.token.holderPk;
     try {
       await navigator.clipboard.writeText(text);
       setCopied(what);
@@ -194,8 +237,12 @@ export default function HolderProofs() {
           <div className="alert alert-info" role="alert">
             Connect your wallet first.
           </div>
-        ) : !ctx ? null : receipt ? (
-          <ProofReceipt {...receipt} eventName={ctx.eventName} />
+        ) : !ctx ? null : receipts ? (
+          <div className="d-flex flex-column" style={{ gap: "16px" }}>
+            {receipts.map((receipt, index) => (
+              <ProofReceipt key={receipt.txHash || index} {...receipt} eventName={ctx.eventName} />
+            ))}
+          </div>
         ) : (
           <div className="d-flex flex-column" style={{ gap: "12px" }}>
             <div className="info-hint-card m-0">
@@ -213,6 +260,12 @@ export default function HolderProofs() {
                   <p className="m-0 small text-muted">
                     Give the link (or the key) to whoever wants to ask you something.
                   </p>
+                  {linkHasCodes && (
+                    <p className="m-0 mt-1 small text-warning">
+                      This link is personal: it includes your identity code. Give it only to whoever is
+                      checking your document.
+                    </p>
+                  )}
                 </div>
                 <div className="d-flex flex-column flex-shrink-0" style={{ gap: "6px" }}>
                   <button
@@ -252,34 +305,34 @@ export default function HolderProofs() {
               <p className="text-muted small m-0">{mode.empty}</p>
             ) : (
               <ul className="list-unstyled m-0 d-flex flex-column" style={{ gap: "10px" }}>
-                {items.map((item) => {
-                  const isAttribute = item.kind === "attribute";
-                  const qualifies = isAttribute ? valueQualifies(ctx.pkg, item.request.fieldId, item.rule) : true;
-                  const hasValue = !isAttribute || Boolean(ctx.pkg?.fields.some((f) => f.fieldId === item.request.fieldId));
-                  const reason = !isAttribute
-                    ? null
-                    : !item.rule
-                      ? "The accepted values for this question aren't available."
-                      : !hasValue
-                        ? "Your credential has no value for this field."
-                        : !qualifies
-                          ? "Your value isn't one of the accepted ones."
-                          : null;
+                {groupAnswerable(items).map((group) => {
+                  const groupId = group[0].request.requestId;
+                  const reasons = group.map((item) => reasonFor(item, ctx.pkg)).filter(Boolean);
+                  const together = group.length > 1;
                   return (
-                    <li key={item.request.requestId} className="holder-proof-item">
+                    <li key={groupId} className="holder-proof-item">
                       <div>
-                        <p className="m-0 small font-weight-semibold">{questionFor(item)}</p>
-                        <p className="m-0 small text-muted">Asked by {organizerLabel(item.request.verifierPk)}</p>
-                        {reason && <p className="m-0 small text-warning">{reason}</p>}
+                        {group.map((item) => (
+                          <p key={item.request.requestId} className="m-0 small font-weight-semibold">
+                            {questionFor(item)}
+                          </p>
+                        ))}
+                        <p className="m-0 small text-muted">
+                          Asked by {organizerLabel(group[0].request.verifierPk)}
+                          {together && ` · ${group.length} proofs, one signature each`}
+                        </p>
+                        {reasons.map((reason) => (
+                          <p key={reason} className="m-0 small text-warning">{reason}</p>
+                        ))}
                       </div>
                       <button
                         type="button"
                         className="btn btn-card-detail-action btn-sm flex-shrink-0"
-                        onClick={() => answer(item)}
-                        disabled={Boolean(busyId) || Boolean(reason)}
+                        onClick={() => answer(group)}
+                        disabled={Boolean(busyId) || reasons.length > 0}
                       >
                         <ShieldCheck size={14} className="mr-2" />
-                        {busyId === item.request.requestId ? "Proving…" : "Prove"}
+                        {busyId === groupId ? (step ? `Proving ${step}…` : "Proving…") : together ? "Respond" : "Prove"}
                       </button>
                     </li>
                   );
@@ -292,7 +345,7 @@ export default function HolderProofs() {
 
       <div className="drawer-footer d-flex flex-column">
         <button className="btn btn-card-detail-action" onClick={closeDrawer}>
-          {receipt ? "Done" : "Close"}
+          {receipts ? "Done" : "Close"}
         </button>
       </div>
     </div>

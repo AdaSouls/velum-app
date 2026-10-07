@@ -123,7 +123,14 @@ const EventCard = forwardRef(({
   const openSubscribersDrawer = () => {
     dispatch({
       type: "SHOW_SUBSCRIBERS",
-      payload: { event, tokens: eventTokens, label: subscriberListLabel, eventName: metadata?.name || null },
+      payload: {
+        event,
+        tokens: eventTokens,
+        label: subscriberListLabel,
+        eventName: metadata?.name || null,
+        // For reviewing credential update requests (reviewCredentialUpdate.jsx).
+        credentialFields: metadata?.credentialAttributeFields || [],
+      },
     });
   };
 
@@ -169,7 +176,7 @@ const EventCard = forwardRef(({
       href: explorerContractUrl(contractAddress),
       copyable: true,
     });
-    dispatch({ type: "SHOW_BLOCKCHAIN_INFO", payload: { title: "Blockchain Info", fields } });
+    dispatch({ type: "SHOW_BLOCKCHAIN_INFO", payload: { title: "Info", fields } });
   };
 
   // Open to any connected wallet, not just this event's own organizer — poap.compact's
@@ -688,7 +695,7 @@ const EventCard = forwardRef(({
                     onClick={openBlockchainInfoDrawer}
                   >
                     <Database size={14} className="mr-2" />
-                    View Blockchain Info
+                    View Info
                   </button>
 
                   {isOwnEvent &&

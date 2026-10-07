@@ -25,6 +25,7 @@ import {
   packageToLinkFragment,
 } from "../../../midnight/credential-delivery";
 import { canonicalValue, fieldType } from "../../../midnight/attribute-types";
+import { documentLabel } from "../../../midnight/identity";
 import { parseValidity, validUntilIso } from "../../../midnight/validity";
 import SelectDropdown from "../../components/SelectDropdown";
 import { friendlyErrorMessage } from "../../../midnight/friendly-error";
@@ -400,7 +401,9 @@ export default function MintPoap() {
                   const range =
                     type === "number" && (field.min !== undefined || field.max !== undefined)
                       ? ` (${field.min ?? "…"} to ${field.max ?? "…"})`
-                      : "";
+                      : type === "identity"
+                        ? ` (${documentLabel(field)})`
+                        : "";
                   return (
                     <div className="mb-3" key={field.fieldId}>
                       <label className="form-label" htmlFor={inputId}>{field.label}{range}</label>
@@ -417,11 +420,18 @@ export default function MintPoap() {
                           type={type === "number" ? "number" : type === "date" ? "date" : "text"}
                           step={type === "number" ? 1 : undefined}
                           className={`form-control${problem ? " is-invalid" : ""}`}
+                          placeholder={type === "identity" ? "Document number" : undefined}
                           value={value}
                           onChange={(event) => setValue(event.target.value)}
                         />
                       )}
                       {problem && <small className="form-text text-danger d-block">{problem}</small>}
+                      {type === "identity" && !problem && (
+                        <small className="form-text text-muted d-block">
+                          Check it against the person's document. Spaces, dots and dashes are ignored.
+                          Never published: the credential only keeps a salted fingerprint of it.
+                        </small>
+                      )}
                       {field.auto === "validUntil" && !problem && (
                         <small className="form-text text-muted d-block">
                           Set from the event's validity. The holder can prove it's still valid without revealing it.

@@ -1,9 +1,10 @@
 import { Plus, Trash2 } from "lucide-react";
 import { canonicalValue, FIELD_TYPES } from "../../midnight/attribute-types";
+import { ID_COUNTRIES, ID_DOC_TYPES, isKnownCountry, isKnownDocType } from "../../midnight/identity";
 import OptionChipsInput from "./OptionChipsInput";
 import SelectDropdown from "./SelectDropdown";
 
-const TYPE_LABELS = { text: "Text", number: "Number", date: "Date", list: "List" };
+const TYPE_LABELS = { text: "Text", number: "Number", date: "Date", list: "List", identity: "Identity document" };
 
 // A List field's options: the chips (row.options) plus whatever is still being typed
 // (row.optionDraft), so an option isn't lost if Create is pressed before it became a chip. Each
@@ -31,6 +32,10 @@ export function privateFieldRowError(row) {
     const tooLong = options.find((option) => "error" in canonicalValue({ type: "text" }, option));
     if (tooLong) return `"${tooLong}" is longer than 32 bytes.`;
   }
+  if (row.type === "identity") {
+    if (!isKnownCountry(row.country)) return "Pick the document's country.";
+    if (!isKnownDocType(row.docType)) return "Pick the document type.";
+  }
   return null;
 }
 
@@ -42,14 +47,20 @@ export function privateFieldFromRow(row, fieldId) {
     if (row.max !== "" && row.max !== undefined) field.max = Number(row.max);
   }
   if (field.type === "list") field.options = listOptions(row);
+  if (field.type === "identity") {
+    field.country = row.country;
+    field.docType = row.docType;
+  }
   return field;
 }
 
-// Repeatable list of a Credential event's private fields ({ fieldName, type, min, max, options, optionDraft }[])
+// Repeatable list of a Credential event's private fields ({ fieldName, type, min, max, options, optionDraft, country, docType }[])
 // — same controlled, full-array-in/full-array-out contract as ChannelsField.jsx. Empty list is valid
 // (no private fields). The values are filled in per recipient when the credential is issued
 // (mintPoap.jsx); the type decides the input there and the questions that can be asked about it
-// (QuestionBuilder.jsx): numbers and dates allow ranges, like "age ≥ 18".
+// (QuestionBuilder.jsx): numbers and dates allow ranges, like "age ≥ 18". An identity document
+// (identity.ts) fixes its country and type here; each credential then carries one person's number,
+// and a verifier can check it matches the document they saw.
 export default function PrivateAttributesStepFields({ values, onChange }) {
   const attributes = values || [];
 
@@ -63,7 +74,10 @@ export default function PrivateAttributesStepFields({ values, onChange }) {
   };
 
   const addAttribute = () => {
-    onChange([...attributes, { fieldName: "", type: "text", min: "", max: "", options: [], optionDraft: "" }]);
+    onChange([
+      ...attributes,
+      { fieldName: "", type: "text", min: "", max: "", options: [], optionDraft: "", country: "", docType: "" },
+    ]);
   };
 
   return (
@@ -84,7 +98,7 @@ export default function PrivateAttributesStepFields({ values, onChange }) {
               />
               <SelectDropdown
                 ariaLabel="Field type"
-                style={{ maxWidth: "120px", flexShrink: 0 }}
+                style={{ maxWidth: "150px", flexShrink: 0 }}
                 value={type}
                 onChange={(newType) => updateAttribute(index, { type: newType })}
                 options={FIELD_TYPES.map((option) => ({ value: option, label: TYPE_LABELS[option] }))}
@@ -131,6 +145,25 @@ export default function PrivateAttributesStepFields({ values, onChange }) {
                 />
               </div>
             )}
+            {type === "identity" && (
+              <div className="d-flex mb-2" style={{ gap: "8px" }}>
+                <SelectDropdown
+                  ariaLabel="Document country"
+                  value={attribute.country || ""}
+                  onChange={(country) => updateAttribute(index, { country })}
+                  options={[
+                    { value: "", label: "Country" },
+                    ...ID_COUNTRIES.map((c) => ({ value: c.code, label: `${c.label} (${c.code})` })),
+                  ]}
+                />
+                <SelectDropdown
+                  ariaLabel="Document type"
+                  value={attribute.docType || ""}
+                  onChange={(docType) => updateAttribute(index, { docType })}
+                  options={[{ value: "", label: "Document type" }, ...ID_DOC_TYPES.map((t) => ({ value: t.code, label: t.label }))]}
+                />
+              </div>
+            )}
             {error && <small className="form-text text-danger d-block">{error}</small>}
           </div>
         );
@@ -145,7 +178,9 @@ export default function PrivateAttributesStepFields({ values, onChange }) {
         Optional. Private details each credential carries (e.g. Seat, Sector, Birth date). You'll
         fill in the values for each person when you issue their credential; only they receive
         them, and they can prove one to someone without revealing it. Numbers are whole numbers;
-        numbers and dates can be asked about as ranges (e.g. "at least 18").
+        numbers and dates can be asked about as ranges (e.g. "at least 18"). An identity document
+        ties the credential to its holder: a verifier who checks their document can confirm the
+        credential is theirs, so it can't be answered with someone else's.
       </small>
     </div>
   );

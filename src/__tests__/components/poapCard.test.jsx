@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event';
 import PoapCard from '../../jsx/components/poapCard';
 import { mockDrawerContext, renderWithProviders } from '../../testUtils';
 import { getTokenVisibility } from '../../midnight/collection-share';
-import { getEvent } from '../../midnight/indexer.service';
+import { getCredentialUpdateRequest, getEvent } from '../../midnight/indexer.service';
 import { loadCredentialPackage } from '../../midnight/holder-proofs';
 import { act } from '@testing-library/react';
 import { notifyTokenBurned } from '../../midnight/token-events';
@@ -142,12 +142,12 @@ describe('PoapCard Component', () => {
       await waitFor(() => expect(onCollapse).toHaveBeenCalled());
     });
 
-    it('shows the on-chain mint transaction as verified proof, and dispatches it as a copyable field via View Blockchain Info', async () => {
+    it('shows the on-chain mint transaction as verified proof, and dispatches it as a copyable field via View Info', async () => {
       const dispatch = jest.fn();
       renderWithProviders(<PoapCard poap={poap} isExpanded />, { drawerValue, drawerDispatch: dispatch });
       expect(screen.getByText('Verified')).toBeInTheDocument();
 
-      await userEvent.click(screen.getByRole('button', { name: /view blockchain info/i }));
+      await userEvent.click(screen.getByRole('button', { name: /^view info$/i }));
 
       expect(dispatch).toHaveBeenCalledWith({
         type: 'SHOW_BLOCKCHAIN_INFO',
@@ -207,7 +207,7 @@ describe('PoapCard Component', () => {
       const dispatch = jest.fn();
       renderWithProviders(<PoapCard poap={poap} isExpanded />, { drawerValue, drawerDispatch: dispatch });
 
-      await userEvent.click(screen.getByRole('button', { name: /view blockchain info/i }));
+      await userEvent.click(screen.getByRole('button', { name: /^view info$/i }));
 
       const { fields } = dispatch.mock.calls.find(([a]) => a.type === 'SHOW_BLOCKCHAIN_INFO')[0].payload;
       const issuer = fields.find((f) => f.key === 'issuer');
@@ -397,6 +397,37 @@ describe('PoapCard Component', () => {
       expect(dispatch).toHaveBeenCalledWith({
         type: 'SHOW_HOLDER_PROOFS',
         payload: expect.objectContaining({ mode: 'detail', credentialFields: FIELDS, pkg: PKG, eventName: 'Recital' }),
+      });
+    });
+
+    it('shows an identity document masked, its code, and a pending update request', async () => {
+      const DNI = { fieldId: '0d'.repeat(32), label: 'DNI', type: 'identity', country: 'ARG', docType: 'national_id' };
+      const identity = { country: 'ARG', docType: 'national_id', number: '12345678', saltHex: 'ab'.repeat(32) };
+      const pkg = { ...PKG, fields: [{ fieldId: DNI.fieldId, label: 'DNI', valueHex: '77'.repeat(32), randHex: '12'.repeat(32), identity }] };
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        json: jest.fn().mockResolvedValue({
+          name: 'Diploma',
+          category: 'credential',
+          credentialAttributeFields: [DNI],
+          updateRequestKey: 'ef'.repeat(32),
+        }),
+      });
+      loadCredentialPackage.mockResolvedValue(pkg);
+      getCredentialUpdateRequest.mockResolvedValue({ tokenId: 1, status: 'pending' });
+      const dispatch = jest.fn();
+      // Its own metadata URI: useEventMetadata caches per URI across tests.
+      const poap = { ...credentialPoap, metadataURI: 'https://example.com/meta-credential-identity.json' };
+      renderWithProviders(<PoapCard poap={poap} isExpanded />, connected(dispatch));
+
+      expect(await screen.findByText(/National ID · ARG · ••••5678/)).toBeInTheDocument();
+      expect(screen.getByText('Identity code')).toBeInTheDocument();
+      expect(await screen.findByText(/update requested/i)).toBeInTheDocument();
+
+      await userEvent.click(screen.getByRole('button', { name: /request update again/i }));
+      expect(dispatch).toHaveBeenCalledWith({
+        type: 'SHOW_REQUEST_UPDATE',
+        payload: expect.objectContaining({ pkg, updateRequestKey: 'ef'.repeat(32), pending: true }),
       });
     });
 

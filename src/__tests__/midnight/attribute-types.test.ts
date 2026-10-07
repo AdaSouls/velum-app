@@ -1,4 +1,6 @@
 import {
+  addMonths,
+  validityPresetRule,
   addYears,
   canonicalValue,
   describeRule,
@@ -35,6 +37,20 @@ describe('attribute-types', () => {
       expect(canonicalValue(date, '2008-02-29')).toEqual({ value: '2008-02-29' });
       expect(canonicalValue(date, '2007-02-29')).toEqual({ error: 'Must be a date (YYYY-MM-DD).' });
       expect(canonicalValue(date, '24/09/2008')).toEqual({ error: 'Must be a date (YYYY-MM-DD).' });
+    });
+
+    it('has an identity question that publishes nothing about the document', () => {
+      expect(parseRule({ op: 'identity' })).toEqual({ op: 'identity' });
+      expect(ruleSize({ op: 'identity' })).toBe(1);
+      expect(describeRule('DNI', { op: 'identity' })).toBe('DNI matches the document checked');
+      expect(ruleAccepts({ op: 'identity' }, '12345678')).toBe(false);
+      expect(() => expandRule({ op: 'identity' })).toThrow();
+    });
+
+    it('normalizes identity document numbers', () => {
+      const doc = { fieldId: 'f', label: 'DNI', type: 'identity' as const, country: 'ARG', docType: 'national_id' };
+      expect(canonicalValue(doc, '12.345.678')).toEqual({ value: '12345678' });
+      expect(canonicalValue(doc, '12#4')).toHaveProperty('error');
     });
 
     it('accepts only listed options, and short text', () => {
@@ -96,5 +112,39 @@ describe('attribute-types', () => {
   it('adds years without landing on a day that does not exist', () => {
     expect(addYears('2008-09-24', -18)).toBe('1990-09-24');
     expect(addYears('2024-02-29', 1)).toBe('2025-02-28');
+  });
+});
+
+describe('"Valid until" questions in plain words', () => {
+  const ON = '2026-10-07';
+
+  it('turns each question into a date range anchored on the day it was asked', () => {
+    expect(validityPresetRule('valid', ON)).toMatchObject({ op: 'onOrAfter', from: ON, to: '2056-10-07' });
+    expect(validityPresetRule('expired', ON)).toMatchObject({ op: 'onOrBefore', from: '1996-10-07', to: '2026-10-06' });
+    expect(validityPresetRule('expiresWithin', ON, 6)).toMatchObject({ op: 'between', from: ON, to: '2027-04-07' });
+    expect(validityPresetRule('validFor', ON, 12)).toMatchObject({ op: 'onOrAfter', from: '2027-10-07', to: '2056-10-07' });
+  });
+
+  it('describes them in words, with the day they were asked', () => {
+    expect(describeRule('Valid until', validityPresetRule('valid', ON))).toBe('Still valid (checked on 07/10/2026)');
+    expect(describeRule('Valid until', validityPresetRule('expired', ON))).toBe('Expired (checked on 07/10/2026)');
+    expect(describeRule('Valid until', validityPresetRule('expiresWithin', ON, 6))).toBe(
+      'Still valid, but expires within 6 months (checked on 07/10/2026)',
+    );
+    expect(describeRule('Valid until', validityPresetRule('validFor', ON, 24))).toBe(
+      'Valid for at least 2 years more (checked on 07/10/2026)',
+    );
+  });
+
+  it('keeps a published preset only if it rebuilds the same range', () => {
+    const rule = validityPresetRule('expiresWithin', ON, 6);
+    expect(parseRule(JSON.parse(JSON.stringify(rule)))).toEqual(rule);
+    const lying = { ...rule, preset: { kind: 'valid', asOf: ON } };
+    expect(parseRule(lying)).toEqual({ op: 'between', type: 'date', from: rule.from, to: rule.to });
+  });
+
+  it('adds calendar months, clamping to the end of the month', () => {
+    expect(addMonths('2026-01-31', 1)).toBe('2026-02-28');
+    expect(addMonths('2026-10-07', 24)).toBe('2028-10-07');
   });
 });

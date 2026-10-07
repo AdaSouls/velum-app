@@ -120,6 +120,41 @@ export async function getDisclosureRequestsByVerifier(verifierPkHex: string): Pr
   return getJson<IndexedDisclosureRequest[]>(`/api/disclosure-requests?verifierPk=${verifierPkHex}`);
 }
 
+// Credential update requests (credential-update.ts). The ledger only keeps pending ones; the indexer
+// also remembers how each closed: 'dismissed' (dismissCredentialUpdate) or 'burned' (re-issue or
+// revocation). ownerPk/issuerPk/eventId are joined from the token.
+export type IndexedCredentialUpdateRequest = {
+  tokenId: number;
+  payloadCommit: string; // hex
+  status: 'pending' | 'dismissed' | 'burned';
+  requestedBlock: number | null;
+  requestedTx: string | null;
+  closedBlock: number | null;
+  closedTx: string | null;
+  ownerPk: string;
+  issuerPk: string;
+  eventId: string;
+};
+
+export async function getCredentialUpdateRequests(
+  filters: { issuerPk?: string; ownerPk?: string; status?: IndexedCredentialUpdateRequest['status'] } = {},
+): Promise<IndexedCredentialUpdateRequest[]> {
+  const params = new URLSearchParams();
+  Object.entries(filters).forEach(([key, value]) => value && params.set(key, value));
+  const query = params.toString();
+  return getJson<IndexedCredentialUpdateRequest[]>(`/api/credential-update-requests${query ? `?${query}` : ''}`);
+}
+
+// A token's latest update request, or null if its holder never filed one.
+export async function getCredentialUpdateRequest(tokenId: number | bigint): Promise<IndexedCredentialUpdateRequest | null> {
+  try {
+    return await getJson<IndexedCredentialUpdateRequest>(`/api/credential-update-requests/${tokenId}`);
+  } catch (error) {
+    if (error instanceof IndexerNotFoundError) return null;
+    throw error;
+  }
+}
+
 // For an organizer's "pending requests on my events" view — omitting verifierPk entirely returns
 // every published request (confirmed against poap-midnight/indexer/src/api/routes/disclosures.ts's
 // `WHERE $1::text IS NULL OR verifier_pk = $1`), filtered client-side by eventId since there's no

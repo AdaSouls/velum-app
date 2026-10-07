@@ -1,13 +1,15 @@
 import React, { forwardRef, useEffect, useRef, useState } from "react";
 import { motion } from "framer-motion";
-import { Award, BadgeCheck, Calendar, CalendarClock, CalendarX, Database, ExternalLink, Eye, EyeOff, Flame, History, ImageOff, Info, Lock, ShieldCheck, Ticket, X } from "lucide-react";
+import { Award, BadgeCheck, Calendar, CalendarClock, CalendarX, Check, Copy, Database, ExternalLink, Eye, EyeOff, Flame, History, ImageOff, Info, Lock, RefreshCw, ShieldCheck, Ticket, X } from "lucide-react";
 import { useDrawer, useDrawerDispatch } from "../contexts/drawer/drawer.provider";
 import eventOwnerIcon from "../../icons/svg/collection-owner.svg";
 import { useEventMetadata } from "../hooks/useEventMetadata";
 import CategoryBadge from "./CategoryBadge";
 import Tooltip from "./Tooltip";
 import { getClaimActionLabel } from "../constants/eventCategories";
-import { getEvent } from "../../midnight/indexer.service";
+import { getCredentialUpdateRequest, getEvent } from "../../midnight/indexer.service";
+import { CREDENTIAL_UPDATE_EVENT } from "../../midnight/credential-update";
+import { isIdentityField } from "../../midnight/attribute-types";
 import formatDateToDDMMYYYY from "../../utils/formatDateToDDMMYYYY";
 import { explorerBlockUrl, explorerContractUrl, explorerTxUrl } from "../../utils/midnightExplorer";
 import {
@@ -18,6 +20,7 @@ import {
 } from "../../midnight/collection-share";
 import { loadCredentialPackage } from "../../midnight/holder-proofs";
 import { decodeValueHex } from "../../midnight/credential-store";
+import { documentLabel, maskDocNumber } from "../../midnight/identity";
 import { getProofHistory, PROOF_HISTORY_EVENT } from "../../midnight/proof-history";
 import { blockTimestamp, verifyUrl } from "../../midnight/proof-verification";
 import { describeValidity, formatUntil, parseValidity, validityStatus } from "../../midnight/validity";
@@ -183,7 +186,7 @@ const PoapCard = forwardRef(({ poap, isExpanded = false, onExpand = () => {}, on
       href: explorerContractUrl(contractAddress),
       copyable: true,
     });
-    dispatch({ type: "SHOW_BLOCKCHAIN_INFO", payload: { title: "Blockchain Info", fields } });
+    dispatch({ type: "SHOW_BLOCKCHAIN_INFO", payload: { title: "Info", fields } });
   };
 
   // Private details of this credential (B7) — only for credentials whose event defines private
@@ -195,6 +198,12 @@ const PoapCard = forwardRef(({ poap, isExpanded = false, onExpand = () => {}, on
   const [credentialPkg, setCredentialPkg] = useState(null);
   const [credentialStatus, setCredentialStatus] = useState("idle"); // idle | loading | ready | missing | error
   const [showPrivate, setShowPrivate] = useState(false);
+  const [codeCopied, setCodeCopied] = useState(null); // fieldId whose identity code was just copied
+  const copyIdentityCode = (field) => {
+    navigator.clipboard?.writeText(field.identity.saltHex);
+    setCodeCopied(field.fieldId);
+    setTimeout(() => setCodeCopied(null), 2000);
+  };
   useEffect(() => {
     if (!isExpanded || !service || credentialFields.length === 0 || isBurned) return undefined;
     let cancelled = false;
@@ -215,6 +224,46 @@ const PoapCard = forwardRef(({ poap, isExpanded = false, onExpand = () => {}, on
     // holderToken is rebuilt each render from these same poap fields.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isExpanded, service, credentialFields.length, poap.tokenId, isBurned]);
+
+  // Credential update requests (credential-update.ts): only for credentials with an identity document
+  // whose event takes requests (its organizer's inbox key, createEvent.jsx). The latest request's
+  // status comes from the indexer; one filed from this page shows right away.
+  const hasIdentityFields = credentialFields.some(isIdentityField);
+  const updateRequestKey = eventMetadata?.updateRequestKey || null;
+  const [updateRequest, setUpdateRequest] = useState(null); // { status } of the latest request, or null
+  useEffect(() => {
+    if (!isExpanded || !hasIdentityFields || isBurned) return undefined;
+    let cancelled = false;
+    getCredentialUpdateRequest(poap.tokenId)
+      .then((found) => !cancelled && setUpdateRequest(found))
+      .catch((error) => console.error("Error loading the update request:", error));
+    return () => {
+      cancelled = true;
+    };
+  }, [isExpanded, hasIdentityFields, isBurned, poap.tokenId]);
+  useEffect(() => {
+    const onRequested = (event) => {
+      if (event.detail?.tokenId === String(poap.tokenId)) setUpdateRequest({ status: "pending" });
+    };
+    window.addEventListener(CREDENTIAL_UPDATE_EVENT, onRequested);
+    return () => window.removeEventListener(CREDENTIAL_UPDATE_EVENT, onRequested);
+  }, [poap.tokenId]);
+  const canRequestUpdate =
+    !isBurned && Boolean(updateRequestKey) && credentialStatus === "ready" && credentialPkg?.fields.some((f) => f.identity);
+
+  const openRequestUpdate = () => {
+    dispatch({
+      type: "SHOW_REQUEST_UPDATE",
+      payload: {
+        token: holderToken,
+        pkg: credentialPkg,
+        updateRequestKey,
+        eventName: eventMetadata?.name || null,
+        organizerName: eventMetadata?.organization?.name || null,
+        pending: updateRequest?.status === "pending",
+      },
+    });
+  };
 
   // mode: "ownership" (Prove Ownership Anonymously) or "detail" (Prove a Private Detail).
   const openHolderProofs = (mode) => {
@@ -609,17 +658,56 @@ const PoapCard = forwardRef(({ poap, isExpanded = false, onExpand = () => {}, on
                           <p className="m-0 small text-warning">Could not load the private details. Try again in a moment.</p>
                         ) : credentialStatus === "ready" ? (
                           <dl className="credential-private-list m-0">
-                            {credentialPkg.fields.map((field) => (
-                              <div key={field.fieldId}>
-                                <dt>{field.label}</dt>
-                                <dd>{showPrivate ? decodeValueHex(field.valueHex) : "••••••"}</dd>
-                              </div>
-                            ))}
+                            {credentialPkg.fields.map((field) =>
+                              field.identity ? (
+                                // An identity document: the value on-chain is a salted hash, so show
+                                // the document itself, and the salt as the holder's identity code
+                                // (a verifier needs it, with the number they see on the document).
+                                <React.Fragment key={field.fieldId}>
+                                  <div>
+                                    <dt>{field.label}</dt>
+                                    <dd>
+                                      {documentLabel(field.identity)} ·{" "}
+                                      {showPrivate ? field.identity.number : maskDocNumber(field.identity.number)}
+                                    </dd>
+                                  </div>
+                                  <div>
+                                    <dt>Identity code</dt>
+                                    <dd className="d-flex align-items-center" style={{ gap: "6px" }}>
+                                      <span>{showPrivate ? truncateHex(field.identity.saltHex) : "••••••"}</span>
+                                      <button
+                                        type="button"
+                                        className="btn btn-card-detail-action btn-sm py-0 px-1"
+                                        onClick={() => copyIdentityCode(field)}
+                                        aria-label={codeCopied === field.fieldId ? "Identity code copied" : "Copy identity code"}
+                                      >
+                                        {codeCopied === field.fieldId ? <Check size={12} /> : <Copy size={12} />}
+                                      </button>
+                                    </dd>
+                                  </div>
+                                </React.Fragment>
+                              ) : (
+                                <div key={field.fieldId}>
+                                  <dt>{field.label}</dt>
+                                  <dd>{showPrivate ? decodeValueHex(field.valueHex) : "••••••"}</dd>
+                                </div>
+                              ),
+                            )}
                           </dl>
                         ) : null}
                         <p className="m-0 mt-2 small text-muted">
                           Only you can see these. Prove a Private Detail lets you prove one without revealing it.
+                          {credentialStatus === "ready" && credentialPkg.fields.some((field) => field.identity) &&
+                            " Give the identity code only to someone checking your document: with it and the number they see, they can confirm this credential is yours."}
                         </p>
+                        {!isBurned && updateRequest?.status === "pending" && (
+                          <p className="m-0 mt-2 small text-warning">
+                            Update requested. Waiting for the organizer to review it.
+                          </p>
+                        )}
+                        {!isBurned && updateRequest?.status === "dismissed" && (
+                          <p className="m-0 mt-2 small text-muted">The organizer dismissed your last update request.</p>
+                        )}
                       </div>
                       <hr style={{ marginTop: "18px", marginBottom: "18px" }} />
                     </>
@@ -632,7 +720,7 @@ const PoapCard = forwardRef(({ poap, isExpanded = false, onExpand = () => {}, on
                       onClick={openBlockchainInfoDrawer}
                     >
                       <Database size={14} className="mr-2" />
-                      View Blockchain Info
+                      View Info
                     </button>
                     {proofHistory.length > 0 && (
                       <button type="button" className="btn btn-card-detail-action btn-sm" onClick={openProofHistory}>
@@ -675,6 +763,19 @@ const PoapCard = forwardRef(({ poap, isExpanded = false, onExpand = () => {}, on
                         >
                           <Lock size={14} className="mr-2" />
                           Prove a Private Detail
+                        </button>
+                      </Tooltip>
+                    )}
+                    {canRequestUpdate && (
+                      <Tooltip multiline label="Asks the organizer to issue this credential again with a new document number.">
+                        <button
+                          type="button"
+                          className="btn btn-card-detail-action btn-sm"
+                          onClick={openRequestUpdate}
+                          disabled={!midnight?.provider}
+                        >
+                          <RefreshCw size={14} className="mr-2" />
+                          {updateRequest?.status === "pending" ? "Request Update Again" : "Request Update"}
                         </button>
                       </Tooltip>
                     )}

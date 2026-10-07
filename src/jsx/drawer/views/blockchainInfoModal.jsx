@@ -23,7 +23,7 @@ export default function BlockchainInfoModal() {
     dispatch({ type: "CLOSE_DRAWER" });
   };
 
-  const title = blockchainInfo?.title || "Blockchain Info";
+  const title = blockchainInfo?.title || "Info";
   const fields = blockchainInfo?.fields || [];
 
   const copyField = (key, value) => {

@@ -130,11 +130,11 @@ describe('EventCard Component', () => {
   // isExpanded resizes this same card instance in place (see eventCard.jsx's own top-of-file
   // comment) — no separate floating overlay, no ghost placeholder left behind in the grid.
   describe('expanded card', () => {
-    it('dispatches SHOW_BLOCKCHAIN_INFO with the full (untruncated) event id and issuer when View Blockchain Info is clicked', async () => {
+    it('dispatches SHOW_BLOCKCHAIN_INFO with the full (untruncated) event id and issuer when View Info is clicked', async () => {
       const dispatch = jest.fn();
       renderWithProviders(<EventCard event={mockEvent} isExpanded />, { drawerDispatch: dispatch });
 
-      await userEvent.click(screen.getByRole('button', { name: /view blockchain info/i }));
+      await userEvent.click(screen.getByRole('button', { name: /^view info$/i }));
 
       expect(dispatch).toHaveBeenCalledWith({
         type: 'SHOW_BLOCKCHAIN_INFO',
@@ -152,7 +152,7 @@ describe('EventCard Component', () => {
       const event = { ...mockEvent, createdTx: 'dd'.repeat(32) };
       renderWithProviders(<EventCard event={event} isExpanded />, { drawerDispatch: dispatch });
 
-      await userEvent.click(screen.getByRole('button', { name: /view blockchain info/i }));
+      await userEvent.click(screen.getByRole('button', { name: /^view info$/i }));
 
       const { fields } = dispatch.mock.calls.find(([a]) => a.type === 'SHOW_BLOCKCHAIN_INFO')[0].payload;
       const byKey = Object.fromEntries(fields.map((f) => [f.key, f]));
@@ -171,7 +171,7 @@ describe('EventCard Component', () => {
         const dispatch = jest.fn();
         renderWithProviders(<EventCard event={event} variant={variant} isExpanded />, { drawerDispatch: dispatch });
         if (waitForName) await screen.findAllByText(waitForName);
-        await userEvent.click(screen.getByRole('button', { name: /view blockchain info/i }));
+        await userEvent.click(screen.getByRole('button', { name: /^view info$/i }));
         const { fields } = dispatch.mock.calls.find(([a]) => a.type === 'SHOW_BLOCKCHAIN_INFO')[0].payload;
         return fields.find((f) => f.key === 'organizer');
       };
@@ -261,7 +261,7 @@ describe('EventCard Component', () => {
 
       expect(dispatch).toHaveBeenCalledWith({
         type: 'SHOW_SUBSCRIBERS',
-        payload: { event: mockEvent, tokens, label: 'Subscribers', eventName: null },
+        payload: { event: mockEvent, tokens, label: 'Subscribers', eventName: null, credentialFields: [] },
       });
     });
 
@@ -581,7 +581,7 @@ describe('EventCard Component', () => {
       expect(await screen.findByText(/bbbbbbbb…bbbbbb/)).toBeInTheDocument();
     });
 
-    it('still dispatches the full raw organizer key via View Blockchain Info, even with an organizer name set', async () => {
+    it('still dispatches the full raw organizer key via View Info, even with an organizer name set', async () => {
       global.fetch = jest.fn().mockResolvedValue({
         ok: true,
         json: jest.fn().mockResolvedValue({ name: 'DevCon 2026', organization: { name: 'AdaSouls Inc.' } }),
@@ -592,7 +592,7 @@ describe('EventCard Component', () => {
       renderWithProviders(<EventCard event={eventWithMetadata} isExpanded />, { drawerDispatch: dispatch });
 
       await screen.findByText('AdaSouls Inc.');
-      await userEvent.click(screen.getByRole('button', { name: /view blockchain info/i }));
+      await userEvent.click(screen.getByRole('button', { name: /^view info$/i }));
 
       expect(dispatch).toHaveBeenCalledWith({
         type: 'SHOW_BLOCKCHAIN_INFO',

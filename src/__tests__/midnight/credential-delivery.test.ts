@@ -16,6 +16,7 @@ import { buildMerkleTree } from '../../midnight/merkle';
 jest.mock('../../midnight/contract.service', () => ({
   computeCredentialAttrLeaf: jest.fn(),
   computeCredentialLeaf: jest.fn(),
+  computeIdentityValue: jest.fn(),
 }));
 jest.mock('../../midnight/merkle', () => ({
   buildMerkleTree: jest.fn(),
@@ -30,7 +31,7 @@ const TEMPLATE = [
   { fieldId: '02'.repeat(32), label: 'Seat' },
 ];
 
-const { computeCredentialAttrLeaf } = jest.requireMock('../../midnight/contract.service');
+const { computeCredentialAttrLeaf, computeIdentityValue } = jest.requireMock('../../midnight/contract.service');
 
 beforeEach(() => {
   window.localStorage.clear();
@@ -49,6 +50,19 @@ describe('buildCredentialAttributes', () => {
     expect(Buffer.from(fields[0].valueHex, 'hex').toString('utf8').replace(/\0+$/, '')).toBe('Campo');
     expect(fields[0].randHex).toMatch(/^[0-9a-f]{64}$/);
     expect(root).toEqual(new Uint8Array(32).fill(1));
+  });
+
+  it('commits an identity document as its salted value and keeps the opening for the holder', async () => {
+    computeIdentityValue.mockImplementation(() => new Uint8Array(32).fill(7));
+    const template = [{ fieldId: '03'.repeat(32), label: 'DNI', type: 'identity', country: 'ARG', docType: 'national_id' }];
+    const { fields } = await buildCredentialAttributes(template, { [template[0].fieldId]: '12.345.678' });
+    expect(fields[0].valueHex).toBe('07'.repeat(32));
+    expect(fields[0].identity).toMatchObject({ country: 'ARG', docType: 'national_id', number: '12345678' });
+    expect(fields[0].identity?.saltHex).toMatch(/^[0-9a-f]{64}$/);
+    const [country, , number, salt] = computeIdentityValue.mock.calls[0];
+    expect(Buffer.from(country).toString('utf8').replace(/\0+$/, '')).toBe('ARG');
+    expect(Buffer.from(number).toString('utf8').replace(/\0+$/, '')).toBe('12345678');
+    expect(Buffer.from(salt).toString('hex')).toBe(fields[0].identity?.saltHex);
   });
 
   it('returns the all-zero root when nothing is filled in', async () => {
