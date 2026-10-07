@@ -359,7 +359,9 @@ const Docs = () => {
                     <strong>Identity check</strong> (credentials with an identity document): type the
                     number on the person's document and their identity code (it comes in their link).
                     It's published as a second request together with your question; the holder
-                    answers both at once, one signature each.
+                    answers both at once, one signature each, and sends you one link that checks both.
+                    It's on by default: turning it off asks you to confirm, because without it someone
+                    could answer with a borrowed key.
                   </li>
                 </ul>
               </Section>
@@ -437,7 +439,8 @@ const Docs = () => {
                     <strong>Identity documents:</strong> if your credential carries one, the link also
                     carries your identity code (never the number). Give it only to whoever checks your
                     document. An identity check and the question that came with it are answered
-                    together with <strong>Respond</strong>.
+                    together with <strong>Respond</strong>, and you get one link that checks both
+                    proofs: send that one.
                   </li>
                   <li>
                     <strong>Request Update:</strong> if your document changes, ask the organizer to
@@ -471,6 +474,13 @@ const Docs = () => {
                   <li>when it was made, and until when it's valid</li>
                   <li>whether the credential was revoked since</li>
                 </ul>
+                <p>
+                  A link can check several proofs at once (an identity check and the question asked
+                  with it). The page says whether they're all valid and answered by the same holder.
+                  If you see only the answer to a question whose asker also requested an identity
+                  check, it warns <strong>Identity proof missing</strong>: without it, the answer
+                  could come from someone else's credential.
+                </p>
               </Section>
 
               <Section id="privacy" title="What's public, what's private">

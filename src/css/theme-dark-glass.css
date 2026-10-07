@@ -1367,6 +1367,12 @@ select option,
   background: rgba(255, 255, 255, 0.02);
 }
 
+.verify-proof-divider {
+  border: 0;
+  border-top: 1px solid var(--glass-border);
+  opacity: 1;
+}
+
 .verify-proof-footer {
   display: flex;
   flex-direction: column;

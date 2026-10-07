@@ -109,6 +109,20 @@ export function blockTimestamp(height: number): Promise<number | null> {
   return time;
 }
 
-export function verifyUrl(txHash: string): string {
-  return `${window.location.origin}/app/verify?tx=${txHash}`;
+// One proof, or several checked together (an identity check and the question asked with it):
+// /app/verify?tx=a,b.
+export function verifyUrl(txHash: string | string[]): string {
+  const hashes = Array.isArray(txHash) ? txHash.filter(Boolean).join(',') : txHash;
+  return `${window.location.origin}/app/verify?tx=${hashes}`;
+}
+
+const MAX_PROOFS_PER_CHECK = 5;
+
+// The transaction hashes in a verify link or the search box: comma- or space-separated, deduplicated.
+export function parseProofHashes(input: string): string[] {
+  const hashes = (input || '')
+    .split(/[\s,]+/)
+    .map((hash) => hash.trim())
+    .filter(Boolean);
+  return Array.from(new Set(hashes)).slice(0, MAX_PROOFS_PER_CHECK);
 }

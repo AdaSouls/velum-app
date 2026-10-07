@@ -260,6 +260,25 @@ describe('PublishDisclosureRequest drawer view', () => {
       expect(await screen.findByText(/DNI matches the document checked/)).toBeInTheDocument();
     });
 
+    it('asks for an explicit confirmation to go without the identity check', async () => {
+      const publishDisclosureRequest = jest.fn().mockResolvedValue({ private: { result: new Uint8Array(32).fill(0x02) } });
+      const drawerValue = buildDrawerValue({ publishDisclosureRequest });
+      drawerValue.disclosureEvent = { eventId: EVENT_ID_HEX, fields: [FIELD, DNI], recipient: RECIPIENT };
+      renderWithProviders(<PublishDisclosureRequest />, { drawerValue });
+
+      await userEvent.click(screen.getByLabelText(/identity check: the credential is theirs/i));
+      await userEvent.type(screen.getAllByLabelText('Candidate value')[0], 'EU');
+      const publish = screen.getByRole('button', { name: /^publish request$/i });
+      expect(screen.getByText(/anyone the holder lends their key to could answer/i)).toBeInTheDocument();
+      expect(publish).toBeDisabled();
+
+      await userEvent.click(screen.getByLabelText(/i understand, ask without it/i));
+      expect(publish).toBeEnabled();
+      await userEvent.click(publish);
+      await waitFor(() => expect(publishDisclosureRequest).toHaveBeenCalledTimes(1));
+      expect(publishDisclosureRequest.mock.calls[0][2]).toEqual(Uint8Array.from(Buffer.from(FIELD.fieldId, 'hex')));
+    });
+
     it('needs the number and a valid code before publishing', async () => {
       const publishDisclosureRequest = jest.fn();
       const drawerValue = buildDrawerValue({ publishDisclosureRequest });

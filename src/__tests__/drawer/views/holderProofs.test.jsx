@@ -107,6 +107,21 @@ describe('HolderProofs drawer view', () => {
     expect(screen.getByRole('heading', { name: /prove a private detail/i })).toBeInTheDocument();
   });
 
+  it('answers a group together and gives one link that checks every proof', async () => {
+    const identity = { kind: 'attribute', request: request('31'.repeat(32), SECTOR), label: 'DNI', rule: { op: 'identity' }, verified: true };
+    const question = { kind: 'attribute', request: request('32'.repeat(32), SECTOR), label: 'Sector', rule: { op: 'oneOf', values: ['Campo'] }, verified: true };
+    listAnswerableRequests.mockResolvedValue([identity, question]);
+    groupAnswerable.mockImplementation((items) => [items]);
+    valueQualifies.mockReturnValue(true);
+    proveAttribute.mockResolvedValueOnce({ txHash: 'a1'.repeat(32) }).mockResolvedValueOnce({ txHash: 'a2'.repeat(32) });
+    renderView('detail');
+
+    await userEvent.click(await screen.findByRole('button', { name: /^respond$/i }));
+    await waitFor(() => expect(proveAttribute).toHaveBeenCalledTimes(2));
+    const link = await screen.findByLabelText(/^link that checks all proofs$/i);
+    expect(link.value).toMatch(new RegExp(`/app/verify\\?tx=${'a1'.repeat(32)},${'a2'.repeat(32)}$`));
+  });
+
   it('answers an attendance request anonymously and shows the receipt', async () => {
     listAnswerableRequests.mockResolvedValue([{ kind: 'attendance', request: request('11'.repeat(32)) }]);
     proveAttendance.mockResolvedValue({ txHash: 'ab'.repeat(32) });

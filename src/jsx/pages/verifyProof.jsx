@@ -1,11 +1,11 @@
-import { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { Award, BadgeCheck, CircleAlert, ExternalLink, Search } from "lucide-react";
+import { Award, BadgeCheck, CircleAlert, ExternalLink, Search, UserCheck } from "lucide-react";
 import Layout from "../layout/layout";
-import { blockTimestamp, lookupProofTransaction, PROOF_KINDS } from "../../midnight/proof-verification";
+import { blockTimestamp, lookupProofTransaction, parseProofHashes, PROOF_KINDS } from "../../midnight/proof-verification";
 import { describeValidity, formatUntil, parseValidity, validityStatus } from "../../midnight/validity";
 import { decodeProofDetails, isZeroHex } from "../../midnight/proof-transcript";
-import { getEvent, getToken } from "../../midnight/indexer.service";
+import { getDisclosureRequestsByVerifier, getEvent, getToken } from "../../midnight/indexer.service";
 import { fetchMetadata } from "../hooks/useEventMetadata";
 import { describeRule, isIdentityField } from "../../midnight/attribute-types";
 import { documentLabel } from "../../midnight/identity";
@@ -53,6 +53,8 @@ async function loadProofContext(entryPoint, details, proofTimestamp) {
 
   let fieldLabel = null;
   let rule = null;
+  let isIdentity = false;
+  let identityRequestIds = [];
   if (!isZeroHex(details.fieldId)) {
     const fields =
       entryPoint === "proveCredentialAttribute" ? metadata?.credentialAttributeFields : metadata?.privateAttributeFields;
@@ -63,6 +65,9 @@ async function loadProofContext(entryPoint, details, proofTimestamp) {
     if (isIdentityField(field)) {
       fieldLabel = `${field.label} (${documentLabel(field)})`;
       rule = { op: "identity" };
+      isIdentity = true;
+    } else if (entryPoint === "proveCredentialAttribute" && details.recipientPk) {
+      identityRequestIds = await identityChecksFor(details, fields).catch(() => []);
     }
   }
   if (!rule && !isZeroHex(details.setRoot)) {
@@ -73,48 +78,77 @@ async function loadProofContext(entryPoint, details, proofTimestamp) {
     rule = found?.verified ? found.rule : null;
   }
   const validityInfo = await loadValidity(entryPoint, metadata, token, proofTimestamp).catch(() => null);
-  return { event, metadata, token, fieldLabel, rule, validityInfo };
+  return { event, metadata, token, fieldLabel, rule, validityInfo, isIdentity, identityRequestIds };
 }
 
-// B8 — public check of a proof receipt (ProofReceipt.jsx's verify link). No wallet: reads the
-// transaction straight from the Midnight indexer, and what it proved from its own transcript.
-export default function VerifyProof() {
-  const [searchParams] = useSearchParams();
-  const [txHash, setTxHash] = useState(searchParams.get("tx") || "");
-  const [submitted, setSubmitted] = useState(searchParams.get("tx") || "");
+// The identity checks the same asker addressed to the same holder about this event
+// (publishDisclosureRequest.jsx publishes one next to the question). If there are any, this answer
+// alone doesn't show the credential is the holder's own: someone lending their key could answer
+// the question, but not the identity check. Returns their request ids.
+async function identityChecksFor(details, fields) {
+  const identityFieldIds = new Set((fields || []).filter(isIdentityField).map((f) => f.fieldId.toLowerCase()));
+  if (identityFieldIds.size === 0) return [];
+  const requests = await getDisclosureRequestsByVerifier(details.verifierPk);
+  return requests
+    .filter(
+      (request) =>
+        request.eventId?.toLowerCase() === details.eventId &&
+        request.recipientPk?.toLowerCase() === details.recipientPk &&
+        identityFieldIds.has(request.fieldId?.toLowerCase()),
+    )
+    .map((request) => request.requestId.toLowerCase());
+}
+
+// One proof on the page: looks the transaction up, decodes what it proved and reports the result
+// up (onChecked), so the page can tell whether an identity check that came with a question was
+// answered too. `identityAnswered` = request ids of the identity proofs verified on this page.
+function ProofSection({ hash, contractAddress, onChecked, identityAnswered }) {
   const [result, setResult] = useState(null);
   const [details, setDetails] = useState(null);
   const [context, setContext] = useState(null);
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(false);
 
-  const contractAddress = process.env.REACT_APP_MIDNIGHT_CONTRACT_ADDRESS;
-
   useEffect(() => {
-    if (!submitted) return undefined;
     let cancelled = false;
     setLoading(true);
     setError(null);
     setResult(null);
     setDetails(null);
     setContext(null);
-    lookupProofTransaction(submitted.trim(), contractAddress)
+    lookupProofTransaction(hash, contractAddress)
       .then(async (found) => {
         if (cancelled) return;
         setResult(found);
         const isProof = found.status === "found" && found.isOurContract && PROOF_KINDS[found.entryPoint]?.isProof;
-        if (!isProof || !found.raw) return;
+        const valid = isProof && found.succeeded !== false;
+        if (!isProof || !found.raw) {
+          onChecked(hash, { valid, details: null, context: null });
+          return;
+        }
         const decoded = await decodeProofDetails(found.raw, contractAddress).catch((decodeError) => {
           console.error("Could not read the proof's details from the transaction:", decodeError);
           return null;
         });
-        if (cancelled || !decoded) return;
+        if (cancelled) return;
+        if (!decoded) {
+          onChecked(hash, { valid, details: null, context: null });
+          return;
+        }
         setDetails(decoded);
-        const loaded = await loadProofContext(found.entryPoint, decoded, found.timestamp);
-        if (!cancelled) setContext(loaded);
+        // Context only puts names on the proof; a failed lookup doesn't make it invalid.
+        const loaded = await loadProofContext(found.entryPoint, decoded, found.timestamp).catch((contextError) => {
+          console.error("Could not load the proof's context:", contextError);
+          return null;
+        });
+        if (cancelled) return;
+        setContext(loaded);
+        onChecked(hash, { valid, details: decoded, context: loaded });
       })
       .catch((lookupError) => {
-        if (!cancelled) setError(friendlyErrorMessage(lookupError, "Could not look up this proof. Try again in a moment."));
+        if (cancelled) return;
+        setError(friendlyErrorMessage(lookupError, "Could not look up this proof. Try again in a moment."));
+        onChecked(hash, { valid: false, details: null, context: null });
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -122,7 +156,7 @@ export default function VerifyProof() {
     return () => {
       cancelled = true;
     };
-  }, [submitted, contractAddress]);
+  }, [hash, contractAddress, onChecked]);
 
   const kind = result?.status === "found" ? PROOF_KINDS[result.entryPoint] : null;
   const valid = result?.status === "found" && result.isOurContract && kind?.isProof && result.succeeded !== false;
@@ -132,6 +166,248 @@ export default function VerifyProof() {
   const askedByOrganizer = details && event && details.verifierPk === event.issuerPk?.toLowerCase();
   const validityInfo = context?.validityInfo;
   const validityNow = validityInfo ? validityStatus(validityInfo.validity, validityInfo.fromMs) : null;
+  const expectsIdentity = valid && context?.identityRequestIds?.length > 0;
+  const identityShown = expectsIdentity && context.identityRequestIds.some((id) => identityAnswered.has(id));
+  const found = result?.status === "found";
+
+  return (
+    <>
+      {found && (
+        <>
+          <div className="verify-proof-heading">
+            {valid ? (
+              <BadgeCheck size={128} strokeWidth={1.25} className="poap-verified-seal-icon" />
+            ) : (
+              <CircleAlert size={128} strokeWidth={1.25} className="text-warning" />
+            )}
+            <p className="m-0 verify-proof-title">
+              {valid
+                ? kind.title
+                : result.isOurContract && kind?.isProof
+                  ? "Failed transaction"
+                  : result.isOurContract
+                    ? "Not a proof"
+                    : "Not a Velum POAP transaction"}
+            </p>
+            {valid && <span className="badge verify-proof-valid-badge">Valid proof</span>}
+            <p className="m-0 text-muted">
+              {valid
+                ? kind.description
+                : result.isOurContract && kind?.isProof
+                  ? "The transaction was recorded but did not succeed, so it proves nothing."
+                  : result.isOurContract
+                    ? `This transaction called "${result.entryPoint}", which doesn't prove anything about a POAP.`
+                    : "This transaction exists, but it doesn't call the Velum POAP contract."}
+            </p>
+          </div>
+
+          {valid && details && (
+            <div className="verify-proof-event">
+              <div className="verify-proof-event-thumb">
+                {metadata?.imageUrl ? <img src={metadata.imageUrl} alt="" /> : <Award size={28} className="text-muted" />}
+              </div>
+              <div style={{ minWidth: 0 }}>
+                <p className="m-0 small text-muted">Event</p>
+                <p className="m-0 font-weight-semibold text-truncate">
+                  {metadata?.name || (context ? `Event ${truncateHex(details.eventId)}` : "Loading…")}
+                </p>
+                {metadata?.organization?.name && (
+                  <p className="m-0 small text-muted text-truncate">by {metadata.organization.name}</p>
+                )}
+              </div>
+            </div>
+          )}
+
+          {expectsIdentity && !identityShown && (
+            <div className="info-hint-card is-warning m-0" role="alert">
+              <CircleAlert size={16} />
+              <p>
+                <span className="text-white">Identity proof missing.</span> Whoever asked this question also asked
+                this holder for an identity check. Without that proof, this answer could come from someone
+                else's credential (a borrowed key). Ask the holder for both proofs, or for the single link that
+                checks them together.
+              </p>
+            </div>
+          )}
+
+          <dl className="proof-receipt-facts verify-proof-facts m-0">
+            {valid && details && (
+              <>
+                <dt>Proven</dt>
+                <dd>{questionFor(result.entryPoint, details, context)}</dd>
+                {expectsIdentity && (
+                  <>
+                    <dt>Identity</dt>
+                    <dd className={identityShown ? "text-success" : "text-warning"}>
+                      {identityShown
+                        ? "Confirmed by the identity proof on this page (same holder)"
+                        : "Not shown: the identity proof isn't on this page"}
+                    </dd>
+                  </>
+                )}
+                {details.tokenId !== null && (
+                  <>
+                    <dt>Token</dt>
+                    <dd>
+                      #{String(details.tokenId)}
+                      {token && (
+                        <span className={token.isBurned ? "text-warning" : "text-muted"}>
+                          {token.isBurned ? ` · revoked since block ${token.burnedBlock ?? "N/A"}` : " · still held today"}
+                        </span>
+                      )}
+                    </dd>
+                  </>
+                )}
+                {validityNow?.untilMs && (
+                  <>
+                    <dt>Validity</dt>
+                    <dd className={validityNow.state === "expired" ? "text-warning" : undefined}>
+                      {validityNow.state === "expired" ? "Expired on " : "Valid until "}
+                      {formatUntil(validityNow.untilMs, validityInfo.validity)}
+                      <span className="text-muted">
+                        {" "}
+                        · {describeValidity(validityInfo.validity)} from {validityInfo.basis}
+                      </span>
+                    </dd>
+                  </>
+                )}
+                <dt>Asked by</dt>
+                <dd title={details.verifierPk}>
+                  {askedByOrganizer ? "The event's organizer" : `Someone else (${truncateHex(details.verifierPk)})`}
+                </dd>
+                {details.recipientPk && (
+                  <>
+                    {/* An addressed request can only be answered by the holder it names. */}
+                    <dt>Answered by</dt>
+                    <dd title={details.recipientPk}>The holder it was addressed to ({truncateHex(details.recipientPk)})</dd>
+                  </>
+                )}
+              </>
+            )}
+            <dt>When</dt>
+            <dd>{result.timestamp ? new Date(result.timestamp).toLocaleString() : "N/A"}</dd>
+            <dt>Block</dt>
+            <dd>
+              {result.blockHeight !== null ? (
+                <a href={explorerBlockUrl(result.blockHeight)} target="_blank" rel="noopener noreferrer" className="text-white">
+                  {result.blockHeight} <ExternalLink size={12} />
+                </a>
+              ) : (
+                "N/A"
+              )}
+            </dd>
+            <dt>Transaction</dt>
+            <dd>
+              <a href={explorerTxUrl(result.hash)} target="_blank" rel="noopener noreferrer" className="text-white">
+                {truncateHex(result.hash)} <ExternalLink size={12} />
+              </a>
+            </dd>
+            {valid && details && (
+              <>
+                <dt>Event ID</dt>
+                <dd title={details.eventId}>{truncateHex(details.eventId)}</dd>
+                <dt>Request ID</dt>
+                <dd title={details.requestId}>{truncateHex(details.requestId)}</dd>
+              </>
+            )}
+            {result.entryPoint && (
+              <>
+                <dt>Circuit</dt>
+                <dd>{result.entryPoint}</dd>
+              </>
+            )}
+            <dt>Contract</dt>
+            <dd title={contractAddress}>{truncateHex(contractAddress)}</dd>
+          </dl>
+
+          {valid && (
+            <p className="text-muted small m-0 text-center">
+              A proof only reaches the chain if it's correct, so a confirmed transaction is the proof. It
+              shows the holder had this POAP at that moment; ask for a new proof to check they still do.
+            </p>
+          )}
+        </>
+      )}
+
+      {loading && !result && <p className="text-muted small m-0 text-center">Checking on the Midnight network…</p>}
+      {error && (
+        <div className="alert alert-danger m-0" role="alert">
+          {error}
+        </div>
+      )}
+      {result?.status === "not-found" && (
+        <div className="alert alert-danger m-0" role="alert">
+          No transaction with this hash exists on this network. The proof is not valid here.
+        </div>
+      )}
+    </>
+  );
+}
+
+// Several proofs checked together (an identity check and the question asked with it, see
+// holderProofs.jsx's combined link): are they all valid, and answered by the same holder?
+function ProofSetSummary({ hashes, checks }) {
+  const done = hashes.filter((hash) => checks[hash]);
+  if (done.length < hashes.length) {
+    return <p className="text-muted small m-0 text-center">Checking {hashes.length} proofs…</p>;
+  }
+  const allValid = hashes.every((hash) => checks[hash].valid);
+  const holders = new Set(hashes.map((hash) => checks[hash].details?.recipientPk).filter(Boolean));
+  const sameHolder = allValid && holders.size === 1 && hashes.every((hash) => checks[hash].details?.recipientPk);
+  const identityAnswered = new Set(
+    hashes.filter((hash) => checks[hash].valid && checks[hash].context?.isIdentity).map((hash) => checks[hash].details.requestId.toLowerCase()),
+  );
+  const missingIdentity = hashes.some((hash) => {
+    const ids = checks[hash].valid ? checks[hash].context?.identityRequestIds || [] : [];
+    return ids.length > 0 && !ids.some((id) => identityAnswered.has(id));
+  });
+  const ok = allValid && !missingIdentity;
+  return (
+    <div className="verify-proof-heading">
+      {ok ? (
+        <UserCheck size={72} strokeWidth={1.25} className="poap-verified-seal-icon" />
+      ) : (
+        <CircleAlert size={72} strokeWidth={1.25} className="text-warning" />
+      )}
+      <p className="m-0 verify-proof-title">
+        {ok ? `All ${hashes.length} proofs are valid` : allValid ? "An identity proof is missing" : "Not every proof is valid"}
+      </p>
+      <p className="m-0 text-muted">
+        {sameHolder
+          ? identityAnswered.size > 0 && !missingIdentity
+            ? "Answered by the same holder, including the identity check: the credential is theirs."
+            : "Answered by the same holder."
+          : allValid
+            ? "These proofs weren't all answered by the same holder."
+            : "Check each proof below."}
+      </p>
+    </div>
+  );
+}
+
+// B8 — public check of a proof receipt (ProofReceipt.jsx's verify link). No wallet: reads the
+// transaction straight from the Midnight indexer, and what it proved from its own transcript. The
+// link can carry several transactions (?tx=a,b) — an identity check and the question asked with it —
+// so they're checked together.
+export default function VerifyProof() {
+  const [searchParams] = useSearchParams();
+  const [txHash, setTxHash] = useState(searchParams.get("tx") || "");
+  const [submitted, setSubmitted] = useState(searchParams.get("tx") || "");
+  const hashes = useMemo(() => parseProofHashes(submitted), [submitted]);
+  const [checks, setChecks] = useState({});
+  useEffect(() => setChecks({}), [hashes]);
+  const onChecked = useCallback((hash, check) => setChecks((current) => ({ ...current, [hash]: check })), []);
+  const identityAnswered = useMemo(
+    () =>
+      new Set(
+        Object.values(checks)
+          .filter((check) => check.valid && check.context?.isIdentity)
+          .map((check) => check.details.requestId.toLowerCase()),
+      ),
+    [checks],
+  );
+
+  const contractAddress = process.env.REACT_APP_MIDNIGHT_CONTRACT_ADDRESS;
 
   const verifyForm = (
     <form
@@ -146,24 +422,22 @@ export default function VerifyProof() {
         id="verifyTxHash"
         type="text"
         className="form-control"
-        placeholder="Transaction hash from the proof receipt"
+        placeholder="Transaction hash from the proof receipt (several: separate with commas)"
         value={txHash}
         onChange={(changeEvent) => setTxHash(changeEvent.target.value)}
       />
-      <button type="submit" className="btn btn-gradient flex-shrink-0" disabled={!txHash.trim() || loading}>
+      <button type="submit" className="btn btn-gradient flex-shrink-0" disabled={!txHash.trim()}>
         <Search size={14} className="mr-2" />
         Verify
       </button>
     </form>
   );
 
-  const found = result?.status === "found";
-
   return (
     <Layout>
       <div className="verify-proof-page">
         <div className="drawer-modal-preview-card verify-proof-card">
-          {!found && (
+          {hashes.length === 0 && (
             <div className="verify-proof-heading">
               <BadgeCheck size={96} strokeWidth={1.25} className="text-muted" />
               <p className="m-0 verify-proof-title">Verify a Proof</p>
@@ -174,155 +448,22 @@ export default function VerifyProof() {
             </div>
           )}
 
-          {found && (
-            <>
-              <div className="verify-proof-heading">
-                {valid ? (
-                  <BadgeCheck size={128} strokeWidth={1.25} className="poap-verified-seal-icon" />
-                ) : (
-                  <CircleAlert size={128} strokeWidth={1.25} className="text-warning" />
-                )}
-                <p className="m-0 verify-proof-title">
-                  {valid
-                    ? kind.title
-                    : result.isOurContract && kind?.isProof
-                      ? "Failed transaction"
-                      : result.isOurContract
-                        ? "Not a proof"
-                        : "Not a Velum POAP transaction"}
-                </p>
-                {valid && <span className="badge verify-proof-valid-badge">Valid proof</span>}
-                <p className="m-0 text-muted">
-                  {valid
-                    ? kind.description
-                    : result.isOurContract && kind?.isProof
-                      ? "The transaction was recorded but did not succeed, so it proves nothing."
-                      : result.isOurContract
-                        ? `This transaction called "${result.entryPoint}", which doesn't prove anything about a POAP.`
-                        : "This transaction exists, but it doesn't call the Velum POAP contract."}
-                </p>
-              </div>
+          {hashes.length > 1 && <ProofSetSummary hashes={hashes} checks={checks} />}
 
-              {valid && details && (
-                <div className="verify-proof-event">
-                  <div className="verify-proof-event-thumb">
-                    {metadata?.imageUrl ? <img src={metadata.imageUrl} alt="" /> : <Award size={28} className="text-muted" />}
-                  </div>
-                  <div style={{ minWidth: 0 }}>
-                    <p className="m-0 small text-muted">Event</p>
-                    <p className="m-0 font-weight-semibold text-truncate">
-                      {metadata?.name || (context ? `Event ${truncateHex(details.eventId)}` : "Loading…")}
-                    </p>
-                    {metadata?.organization?.name && (
-                      <p className="m-0 small text-muted text-truncate">by {metadata.organization.name}</p>
-                    )}
-                  </div>
-                </div>
-              )}
-
-              <dl className="proof-receipt-facts verify-proof-facts m-0">
-                {valid && details && (
-                  <>
-                    <dt>Proven</dt>
-                    <dd>{questionFor(result.entryPoint, details, context)}</dd>
-                    {details.tokenId !== null && (
-                      <>
-                        <dt>Token</dt>
-                        <dd>
-                          #{String(details.tokenId)}
-                          {token && (
-                            <span className={token.isBurned ? "text-warning" : "text-muted"}>
-                              {token.isBurned ? ` · revoked since block ${token.burnedBlock ?? "N/A"}` : " · still held today"}
-                            </span>
-                          )}
-                        </dd>
-                      </>
-                    )}
-                    {validityNow?.untilMs && (
-                      <>
-                        <dt>Validity</dt>
-                        <dd className={validityNow.state === "expired" ? "text-warning" : undefined}>
-                          {validityNow.state === "expired" ? "Expired on " : "Valid until "}
-                          {formatUntil(validityNow.untilMs, validityInfo.validity)}
-                          <span className="text-muted">
-                            {" "}
-                            · {describeValidity(validityInfo.validity)} from {validityInfo.basis}
-                          </span>
-                        </dd>
-                      </>
-                    )}
-                    <dt>Asked by</dt>
-                    <dd title={details.verifierPk}>
-                      {askedByOrganizer ? "The event's organizer" : `Someone else (${truncateHex(details.verifierPk)})`}
-                    </dd>
-                    {details.recipientPk && (
-                      <>
-                        {/* An addressed request can only be answered by the holder it names. */}
-                        <dt>Answered by</dt>
-                        <dd title={details.recipientPk}>The holder it was addressed to ({truncateHex(details.recipientPk)})</dd>
-                      </>
-                    )}
-                  </>
-                )}
-                <dt>When</dt>
-                <dd>{result.timestamp ? new Date(result.timestamp).toLocaleString() : "N/A"}</dd>
-                <dt>Block</dt>
-                <dd>
-                  {result.blockHeight !== null ? (
-                    <a href={explorerBlockUrl(result.blockHeight)} target="_blank" rel="noopener noreferrer" className="text-white">
-                      {result.blockHeight} <ExternalLink size={12} />
-                    </a>
-                  ) : (
-                    "N/A"
-                  )}
-                </dd>
-                <dt>Transaction</dt>
-                <dd>
-                  <a href={explorerTxUrl(result.hash)} target="_blank" rel="noopener noreferrer" className="text-white">
-                    {truncateHex(result.hash)} <ExternalLink size={12} />
-                  </a>
-                </dd>
-                {valid && details && (
-                  <>
-                    <dt>Event ID</dt>
-                    <dd title={details.eventId}>{truncateHex(details.eventId)}</dd>
-                    <dt>Request ID</dt>
-                    <dd title={details.requestId}>{truncateHex(details.requestId)}</dd>
-                  </>
-                )}
-                {result.entryPoint && (
-                  <>
-                    <dt>Circuit</dt>
-                    <dd>{result.entryPoint}</dd>
-                  </>
-                )}
-                <dt>Contract</dt>
-                <dd title={contractAddress}>{truncateHex(contractAddress)}</dd>
-              </dl>
-
-              {valid && (
-                <p className="text-muted small m-0 text-center">
-                  A proof only reaches the chain if it's correct, so a confirmed transaction is the proof. It
-                  shows the holder had this POAP at that moment; ask for a new proof to check they still do.
-                </p>
-              )}
-            </>
-          )}
-
-          {loading && !result && <p className="text-muted small m-0 text-center">Checking on the Midnight network…</p>}
-          {error && (
-            <div className="alert alert-danger m-0" role="alert">
-              {error}
-            </div>
-          )}
-          {result?.status === "not-found" && (
-            <div className="alert alert-danger m-0" role="alert">
-              No transaction with this hash exists on this network. The proof is not valid here.
-            </div>
-          )}
+          {hashes.map((hash, index) => (
+            <React.Fragment key={hash}>
+              {(index > 0 || hashes.length > 1) && <hr className="verify-proof-divider m-0" />}
+              <ProofSection
+                hash={hash}
+                contractAddress={contractAddress}
+                onChecked={onChecked}
+                identityAnswered={identityAnswered}
+              />
+            </React.Fragment>
+          ))}
 
           <div className="verify-proof-footer">
-            {found && <p className="m-0 small text-muted">Verify another proof</p>}
+            {hashes.length > 0 && <p className="m-0 small text-muted">Verify another proof</p>}
             {verifyForm}
           </div>
         </div>

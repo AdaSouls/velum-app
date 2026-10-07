@@ -79,11 +79,29 @@ En "Ask for a Disclosure", si la credencial tiene documentos, aparece **Identity
   Termina con un comprobante por cada prueba.
 - Como un holder tiene una sola credencial por evento, las dos pruebas son sobre la misma
   credencial, tal como dice tu documentación.
+- Al terminar, además de un comprobante por prueba, le damos **un solo link que verifica las dos
+  juntas** (`/app/verify?tx=<identidad>,<pregunta>`), para que se lo mande al verificador.
 
 ### 2.6 La página pública de verificación
-`/app/verify` muestra la prueba de identidad como "DNI (National ID · ARG) matches the document
-checked". Esa página **no puede confirmar cuál** documento era, porque el número no se publica.
-Eso lo sabe solo quien pidió la prueba.
+- `/app/verify` muestra la prueba de identidad como "DNI (National ID · ARG) matches the document
+  checked". Esa página **no puede confirmar cuál** documento era, porque el número no se publica.
+  Eso lo sabe solo quien pidió la prueba.
+- **Varias pruebas en un link** (`?tx=a,b`): la página verifica cada una y arriba muestra un resumen:
+  si todas son válidas, si las respondió el mismo holder (todas las pruebas de atributos van dirigidas,
+  así que el `recipientPk` sale de la transacción) y si el control de identidad está.
+- **Falta la prueba de identidad:** para cada respuesta a una pregunta, la página busca en el indexer
+  si el mismo verificador le mandó al mismo holder, sobre el mismo evento, un pedido de identidad
+  (`/api/disclosure-requests?verifierPk=…`, filtrando por `eventId`, `recipientPk` y un `fieldId` de
+  tipo identity). Si existe y su prueba no está en la página, muestra en rojo "Identity proof
+  missing".
+  - Esto cubre el caso de préstamo: el compañero **puede** responder la pregunta (va dirigida a su
+    clave), pero no la de identidad.
+  - Sin el aviso, un verificador distraído podría aceptar solo la respuesta.
+
+### 2.7 El control de identidad viene obligatorio
+En el popup del verificador, si la credencial tiene documento, el control de identidad viene
+activado. Para apagarlo hay que confirmar explícitamente ("I understand, ask without it"), con un
+aviso de que sin él cualquiera a quien el holder le preste su clave podría responder.
 
 ---
 
@@ -227,6 +245,13 @@ Otro cambio menor: los botones "View Blockchain Info" ahora dicen **View Info**.
   falta su `local_sk`. Por eso el link se marca como personal.
 - **Son dos firmas, no una.** Identidad + pregunta son dos pedidos y dos pruebas (lo confirmaste).
   En la interfaz se siente como una sola acción.
+- **El verificador tiene que exigir las dos pruebas.** Criptográficamente el préstamo queda
+  bloqueado, pero solo si el verificador no acepta la respuesta sin la prueba de identidad. Para eso
+  están el link combinado y el aviso "Identity proof missing" de `/app/verify`. El aviso depende de
+  lo que el verificador publicó: si nunca pidió identidad, no hay nada que avisar.
+- **Qué no cubre:** que el emisor cargue mal el documento, que el verificador no mire el documento
+  físico, las credenciales emitidas sin campo de identidad y la suplantación física (alguien que
+  se presenta con el DNI de otro).
 - **Pedidos basura.** Cualquiera puede subir sobres bajo un `payloadCommit`. El organizador descarta
   los que no tienen ese hash o no abren con su clave, y el servidor devuelve como mucho 10
   candidatos.

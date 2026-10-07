@@ -18,6 +18,7 @@ import ProofReceipt from "../../components/ProofReceipt";
 import loadingGif from "../../../images/loading.gif";
 import { friendlyErrorMessage } from "../../../midnight/friendly-error";
 import { requestLink } from "../../../midnight/invite-links";
+import { verifyUrl } from "../../../midnight/proof-verification";
 
 const PROGRESS_TITLE = "Proving";
 // Below this many live POAPs in the event, "one of the holders" barely hides anyone.
@@ -208,10 +209,14 @@ export default function HolderProofs() {
     (ctx?.pkg?.fields || []).filter((field) => field.identity).map((field) => [field.fieldId, field.identity.saltHex]),
   );
   const linkHasCodes = Object.keys(idCodes).length > 0;
-  const [copied, setCopied] = useState(null); // "key" | "link"
+  const [copied, setCopied] = useState(null); // "key" | "link" | "combined"
   const copy = async (what) => {
     const text =
-      what === "link" ? requestLink(window.location.origin, ctx.token.eventId, ctx.token.holderPk, idCodes) : ctx.token.holderPk;
+      what === "link"
+        ? requestLink(window.location.origin, ctx.token.eventId, ctx.token.holderPk, idCodes)
+        : what === "combined"
+          ? verifyUrl(receipts.map((receipt) => receipt.txHash))
+          : ctx.token.holderPk;
     try {
       await navigator.clipboard.writeText(text);
       setCopied(what);
@@ -239,6 +244,37 @@ export default function HolderProofs() {
           </div>
         ) : !ctx ? null : receipts ? (
           <div className="d-flex flex-column" style={{ gap: "16px" }}>
+            {receipts.length > 1 && receipts.every((receipt) => receipt.txHash) && (
+              // Answered together (an identity check + its question): one link checks them all, so
+              // whoever asked can't miss the identity proof (verifyProof.jsx).
+              <div className="info-hint-card m-0">
+                <ShieldCheck size={16} />
+                <div style={{ minWidth: 0 }} className="flex-grow-1">
+                  <p className="m-0 mb-2">
+                    Send whoever asked <span className="text-white">this one link</span>: it checks all{" "}
+                    {receipts.length} proofs together, identity included.
+                  </p>
+                  <div className="d-flex align-items-center" style={{ gap: "8px" }}>
+                    <input
+                      type="text"
+                      className="form-control form-control-sm"
+                      readOnly
+                      aria-label="Link that checks all proofs"
+                      value={verifyUrl(receipts.map((receipt) => receipt.txHash))}
+                      onFocus={(event) => event.target.select()}
+                    />
+                    <button
+                      type="button"
+                      className="btn btn-card-detail-action btn-sm flex-shrink-0"
+                      onClick={() => copy("combined")}
+                      aria-label={copied === "combined" ? "Link copied" : "Copy the link that checks all proofs"}
+                    >
+                      {copied === "combined" ? <Check size={14} /> : <Copy size={14} />}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
             {receipts.map((receipt, index) => (
               <ProofReceipt key={receipt.txHash || index} {...receipt} eventName={ctx.eventName} />
             ))}

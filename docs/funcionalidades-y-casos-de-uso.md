@@ -97,7 +97,8 @@ de credencial…), usada para describir y filtrar.
     años". Se cuenta desde el día en que se pregunta.
   - **Control de identidad** (credenciales con un documento de identidad): el verificador escribe el
     número del documento que tiene delante y el código de identidad del holder (viene en su link).
-    Se publica como un segundo pedido junto con la pregunta; el holder responde los dos juntos.
+    Se publica como un segundo pedido junto con la pregunta; el holder responde los dos juntos y
+    manda un solo link que verifica las dos pruebas. Viene activado: apagarlo pide confirmación.
 - **Documentos de identidad en las credenciales**: un tipo de campo privado con país y tipo de
   documento fijos (por ejemplo "DNI, Argentina"). Al emitir se escribe el número; en la cadena solo
   queda una huella con sal. Evita que alguien responda con la credencial de un amigo.
@@ -125,7 +126,7 @@ de credencial…), usada para describir y filtrar.
 - **Prove a Private Detail**: responde las preguntas del organizador sin revelar el valor, qué
   credencial es ni la wallet. Si el valor no califica, el botón se desactiva sin tocar la cadena.
   Un control de identidad y la pregunta que vino con él se responden juntos ("Respond", una firma
-  cada uno).
+  cada uno), y se obtiene un solo link que verifica las dos pruebas.
 - **Código de identidad**: si la credencial tiene un documento, el holder ve el documento tapado y
   su código. El link para quien pregunta lleva el código, nunca el número.
 - **Request Update**: si cambia su documento, le pide al organizador que reemita la credencial. El
@@ -144,6 +145,9 @@ de credencial…), usada para describir y filtrar.
   **hasta cuándo es válido**:
   - Subscription: desde esa prueba.
   - Event o Credential: desde la emisión, cuando la prueba nombra el token.
+- **Varias pruebas en un link** (`?tx=a,b`): verifica todas y dice si las respondió el mismo holder.
+  Si una respuesta venía con un control de identidad del mismo verificador y esa prueba no está,
+  avisa "Identity proof missing".
 - No hace falta cuenta, wallet ni confiar en quien muestra la prueba: la página lee la transacción
   directamente de la cadena.
 

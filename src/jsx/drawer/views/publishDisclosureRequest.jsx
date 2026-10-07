@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { X } from "lucide-react";
+import { Info, X } from "lucide-react";
 import {
   useDrawer,
   useDrawerDispatch,
@@ -67,6 +67,9 @@ async function pollForRequestId({ verifierPkHex, eventIdHex, fieldIdHex, setRoot
 // from the request link), and a second request asks "is it this document?" — a set of one value,
 // computeIdentityValue(...). Both requests go to the same holder; a holder has one credential per
 // event, so both proofs are about the same credential. Two signatures, published in a row.
+// The check is on by default and turning it off takes an explicit confirmation: without it, a
+// borrowed key answers the question just as well (verifyProof.jsx flags a question proof whose
+// identity check is missing).
 export default function PublishDisclosureRequest() {
   const { midnight, disclosureEvent } = useDrawer();
   const dispatch = useDrawerDispatch();
@@ -78,6 +81,12 @@ export default function PublishDisclosureRequest() {
   const [fieldId, setFieldId] = useState(fields[0]?.fieldId || "");
   const [askQuestion, setAskQuestion] = useState(fields.length > 0);
   const [checkIdentity, setCheckIdentity] = useState(identityFields.length > 0);
+  const [skipIdentityConfirmed, setSkipIdentityConfirmed] = useState(false);
+  const skippingIdentity = identityFields.length > 0 && !checkIdentity;
+  const toggleIdentity = (on) => {
+    setCheckIdentity(on);
+    setSkipIdentityConfirmed(false);
+  };
   const [identityFieldId, setIdentityFieldId] = useState(identityFields[0]?.fieldId || "");
   const [docNumber, setDocNumber] = useState("");
   const [idCode, setIdCode] = useState(disclosureEvent?.idCodes?.[identityFields[0]?.fieldId] || "");
@@ -185,6 +194,10 @@ export default function PublishDisclosureRequest() {
     }
     if (!askQuestion && !checkIdentity) {
       errorFunction("Validation Error", "Choose what to ask.", "");
+      return;
+    }
+    if (skippingIdentity && !skipIdentityConfirmed) {
+      errorFunction("Validation Error", "Confirm that you want to ask without the identity check.", "");
       return;
     }
     if (checkIdentity && identityProblem) {
@@ -297,7 +310,7 @@ export default function PublishDisclosureRequest() {
                       type="checkbox"
                       id="checkIdentity"
                       checked={checkIdentity}
-                      onChange={(event) => setCheckIdentity(event.target.checked)}
+                      onChange={(event) => toggleIdentity(event.target.checked)}
                     />
                     <label className="form-check-label" htmlFor="checkIdentity">
                       Identity check: the credential is theirs
@@ -356,6 +369,31 @@ export default function PublishDisclosureRequest() {
                     </div>
                   </>
                 )}
+                {!checkIdentity && (
+                  <div className="col-12">
+                    <div className="info-hint-card is-warning m-0">
+                      <Info size={16} />
+                      <div>
+                        <p className="m-0 mb-2">
+                          Without the identity check, anyone the holder lends their key to could answer
+                          for them, with their own credential.
+                        </p>
+                        <div className="form-check m-0">
+                          <input
+                            className="form-check-input"
+                            type="checkbox"
+                            id="skipIdentityConfirmed"
+                            checked={skipIdentityConfirmed}
+                            onChange={(event) => setSkipIdentityConfirmed(event.target.checked)}
+                          />
+                          <label className="form-check-label" htmlFor="skipIdentityConfirmed">
+                            I understand, ask without it
+                          </label>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </>
             )}
 
@@ -398,7 +436,8 @@ export default function PublishDisclosureRequest() {
             {checkIdentity && askQuestion && (
               <div className="col-12">
                 <small className="form-text text-muted d-block">
-                  Two requests, one signature each. The holder answers both together.
+                  Two requests, one signature each. The holder answers both together and sends you
+                  one link that checks both. A proof of the question alone isn't enough.
                 </small>
               </div>
             )}
@@ -408,6 +447,8 @@ export default function PublishDisclosureRequest() {
                 <div className="alert alert-success m-0" role="status">
                   Published: {published.map((text) => `“${text}”`).join(" and ")}. If it fits, the holder
                   can prove it from their POAP card (Prove a Private Detail), without revealing it.
+                  {published.length > 1 &&
+                    " They'll send you one link that checks both proofs: the answer alone doesn't show the credential is theirs."}
                 </div>
               </div>
             )}
@@ -426,7 +467,8 @@ export default function PublishDisclosureRequest() {
               !recipient ||
               (!askQuestion && !checkIdentity) ||
               (askQuestion && !rule) ||
-              Boolean(checkIdentity && identityProblem)
+              Boolean(checkIdentity && identityProblem) ||
+              (skippingIdentity && !skipIdentityConfirmed)
             }
           >
             {loading ? "Publishing…" : "Publish Request"}
