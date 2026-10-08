@@ -49,6 +49,8 @@ export type IndexedToken = {
   tokenPrivateMetadataCommit: string | null; // hex, all-zero (64 "0" chars) means "no private part"
   // The parent event's own metadata, for context (e.g. "part of event X").
   metadataURI: string | null;
+  // The token this one replaced, when it was minted by reissueCredential; null otherwise.
+  replacesTokenId?: number | null;
 };
 
 async function getJson<T>(path: string): Promise<T> {
@@ -106,7 +108,7 @@ export type IndexedDisclosureRequest = {
   fieldId: string; // hex
   setRoot: string; // hex
   // The holder pseudonym the request is addressed to; null = open (any holder of the event).
-  // Credential-attribute requests are always addressed (proveCredentialAttribute requires it).
+  // Credential questions use credential requests now (getCredentialRequests); these serve ownership proofs.
   recipientPk: string | null;
   publishedBlock: number | null;
   publishedTx: string | null;
@@ -120,13 +122,42 @@ export async function getDisclosureRequestsByVerifier(verifierPkHex: string): Pr
   return getJson<IndexedDisclosureRequest[]>(`/api/disclosure-requests?verifierPk=${verifierPkHex}`);
 }
 
+// A question about one holder's credential (publishCredentialRequest): up to four conditions,
+// answered together in one proof. `conditions` lists only the used slots, each with its `slot` — the
+// position its answer takes in proveCredentialAttributes. Always addressed to recipientPk.
+export type IndexedCredentialCondition = { slot: number; fieldId: string; setRoot: string };
+export type IndexedCredentialRequest = {
+  requestId: string; // hex
+  verifierPk: string; // hex
+  eventId: string; // hex
+  recipientPk: string; // hex, holder pseudonym
+  conditions: IndexedCredentialCondition[];
+  publishedBlock: number | null;
+  publishedTx: string | null;
+};
+
+export async function getCredentialRequests(
+  filters: { verifierPk?: string; recipientPk?: string; eventId?: string } = {},
+): Promise<IndexedCredentialRequest[]> {
+  const params = new URLSearchParams();
+  Object.entries(filters).forEach(([key, value]) => value && params.set(key, value));
+  const query = params.toString();
+  return getJson<IndexedCredentialRequest[]>(`/api/credential-requests${query ? `?${query}` : ''}`);
+}
+
+export async function getCredentialRequest(requestIdHex: string): Promise<IndexedCredentialRequest> {
+  return getJson<IndexedCredentialRequest>(`/api/credential-requests/${requestIdHex}`);
+}
+
 // Credential update requests (credential-update.ts). The ledger only keeps pending ones; the indexer
-// also remembers how each closed: 'dismissed' (dismissCredentialUpdate) or 'burned' (re-issue or
-// revocation). ownerPk/issuerPk/eventId are joined from the token.
+// also remembers how each closed: 'dismissed' (dismissCredentialUpdate), 'reissued'
+// (reissueCredential; reissuedTokenId = the replacement) or 'burned' (revocation or self-burn).
+// ownerPk/issuerPk/eventId are joined from the token.
 export type IndexedCredentialUpdateRequest = {
   tokenId: number;
   payloadCommit: string; // hex
-  status: 'pending' | 'dismissed' | 'burned';
+  status: 'pending' | 'dismissed' | 'burned' | 'reissued';
+  reissuedTokenId?: number | null;
   requestedBlock: number | null;
   requestedTx: string | null;
   closedBlock: number | null;

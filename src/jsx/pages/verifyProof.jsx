@@ -1,11 +1,11 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { Award, BadgeCheck, CircleAlert, ExternalLink, Search, UserCheck } from "lucide-react";
+import { Award, BadgeCheck, CircleAlert, ExternalLink, Search } from "lucide-react";
 import Layout from "../layout/layout";
 import { blockTimestamp, lookupProofTransaction, parseProofHashes, PROOF_KINDS } from "../../midnight/proof-verification";
 import { describeValidity, formatUntil, parseValidity, validityStatus } from "../../midnight/validity";
 import { decodeProofDetails, isZeroHex } from "../../midnight/proof-transcript";
-import { getDisclosureRequestsByVerifier, getEvent, getToken } from "../../midnight/indexer.service";
+import { getEvent, getToken } from "../../midnight/indexer.service";
 import { fetchMetadata } from "../hooks/useEventMetadata";
 import { describeRule, isIdentityField } from "../../midnight/attribute-types";
 import { documentLabel } from "../../midnight/identity";
@@ -14,16 +14,17 @@ import { friendlyErrorMessage } from "../../midnight/friendly-error";
 
 const truncateHex = (hex) => (hex ? `${hex.slice(0, 10)}…${hex.slice(-8)}` : "N/A");
 
-// What the proof was about, in words — built from what the transaction itself disclosed
-// (proof-transcript.ts) plus the event's public metadata. Never from the receipt.
-function questionFor(entryPoint, details, context) {
-  if (entryPoint === "proveTokenOwnership") return `Owns POAP #${String(details.tokenId)} of this event`;
-  if (entryPoint === "proveEventAttendance") return "Holds a valid POAP of this event (which one isn't revealed)";
-  const label = context?.fieldLabel || "A private detail";
-  const scope = entryPoint === "proveCredentialAttribute" ? "" : " of the event";
-  return context?.rule
-    ? describeRule(`${label}${scope}`, context.rule)
-    : `${label}${scope} is one of the accepted values (list not published)`;
+// What the proof was about, in words — one line per thing proven, built from what the transaction
+// itself disclosed (proof-transcript.ts) plus the event's public metadata. Never from the receipt.
+function questionLines(entryPoint, details, context) {
+  if (entryPoint === "proveTokenOwnership") return [`Owns POAP #${String(details.tokenId)} of this event`];
+  if (entryPoint === "proveEventAttendance") return ["Holds a valid POAP of this event (which one isn't revealed)"];
+  const scope = entryPoint === "proveAttributeMembership" || entryPoint === "proveAttributeMembershipOnce" ? " of the event" : "";
+  const conditions = context?.conditions?.length ? context.conditions : [{ label: null, rule: null }];
+  return conditions.map(({ label, rule }) => {
+    const subject = `${label || "A private detail"}${scope}`;
+    return rule ? describeRule(subject, rule) : `${subject} is one of the accepted values (list not published)`;
+  });
 }
 
 // Event, token and question context for a decoded proof. Every lookup is best-effort: the proof
@@ -46,92 +47,40 @@ async function loadValidity(entryPoint, metadata, token, proofTimestamp) {
   return null;
 }
 
+// One condition's label and question. An identity check: its one value is known only to whoever
+// asked and the holder, so this page can't rebuild the set — it says what kind of question it was;
+// the asker knows which document.
+async function describeCondition(entryPoint, details, { fieldId, setRoot }, fields) {
+  const field = (fields || []).find((f) => f.fieldId?.toLowerCase() === fieldId);
+  if (isIdentityField(field)) return { label: `${field.label} (${documentLabel(field)})`, rule: { op: "identity" } };
+  let rule = null;
+  if (!isZeroHex(setRoot)) {
+    // holder-proofs pulls in the compiled contract — only load it when a set has to be checked.
+    // checkAll: a question shown on this page must match the on-chain root, even a big range.
+    const { fetchRequestRule } = await import("../../midnight/holder-proofs");
+    const found = await fetchRequestRule(details.requestId, setRoot, { checkAll: true }).catch(() => null);
+    rule = found?.verified ? found.rule : null;
+  }
+  return { label: field?.label || null, rule };
+}
+
 async function loadProofContext(entryPoint, details, proofTimestamp) {
   const event = await getEvent(details.eventId).catch(() => null);
   const metadata = event?.metadataURI ? await fetchMetadata(event.metadataURI) : null;
   const token = details.tokenId !== null ? await getToken(details.tokenId).catch(() => null) : null;
 
-  let fieldLabel = null;
-  let rule = null;
-  let isIdentity = false;
-  let identityRequestIds = [];
-  if (!isZeroHex(details.fieldId)) {
-    const fields =
-      entryPoint === "proveCredentialAttribute" ? metadata?.credentialAttributeFields : metadata?.privateAttributeFields;
-    const field = (fields || []).find((f) => f.fieldId?.toLowerCase() === details.fieldId);
-    fieldLabel = field?.label || null;
-    // An identity check: its one value is known only to whoever asked and the holder, so this page
-    // can't rebuild the set — it says what kind of question it was; the asker knows which document.
-    if (isIdentityField(field)) {
-      fieldLabel = `${field.label} (${documentLabel(field)})`;
-      rule = { op: "identity" };
-      isIdentity = true;
-    } else if (entryPoint === "proveCredentialAttribute" && details.recipientPk) {
-      identityRequestIds = await identityChecksFor(details, fields).catch(() => []);
-    }
-  }
-  if (!rule && !isZeroHex(details.setRoot)) {
-    // holder-proofs pulls in the compiled contract — only load it when a set has to be checked.
-    // checkAll: a question shown on this page must match the on-chain root, even a big range.
-    const { fetchRequestRule } = await import("../../midnight/holder-proofs");
-    const found = await fetchRequestRule(details.requestId, details.setRoot, { checkAll: true }).catch(() => null);
-    rule = found?.verified ? found.rule : null;
-  }
+  const fields =
+    entryPoint === "proveAttributeMembership" || entryPoint === "proveAttributeMembershipOnce"
+      ? metadata?.privateAttributeFields
+      : metadata?.credentialAttributeFields;
+  const asked = details.conditions || (!isZeroHex(details.fieldId) ? [{ fieldId: details.fieldId, setRoot: details.setRoot }] : []);
+  const conditions = await Promise.all(asked.map((condition) => describeCondition(entryPoint, details, condition, fields)));
   const validityInfo = await loadValidity(entryPoint, metadata, token, proofTimestamp).catch(() => null);
-  return { event, metadata, token, fieldLabel, rule, validityInfo, isIdentity, identityRequestIds };
+  return { event, metadata, token, conditions, validityInfo };
 }
 
-// The identity checks the same asker addressed to the same holder about this event
-// (publishDisclosureRequest.jsx publishes one next to the question). If there are any, this answer
-// alone doesn't show the credential is the holder's own: someone lending their key could answer
-// the question, but not the identity check. Returns their request ids.
-async function identityChecksFor(details, fields) {
-  const identityFieldIds = new Set((fields || []).filter(isIdentityField).map((f) => f.fieldId.toLowerCase()));
-  if (identityFieldIds.size === 0) return [];
-  const requests = await getDisclosureRequestsByVerifier(details.verifierPk);
-  return requests
-    .filter(
-      (request) =>
-        request.eventId?.toLowerCase() === details.eventId &&
-        request.recipientPk?.toLowerCase() === details.recipientPk &&
-        identityFieldIds.has(request.fieldId?.toLowerCase()),
-    )
-    .map((request) => request.requestId.toLowerCase());
-}
-
-// One proof on the page: looks the transaction up, decodes what it proved and reports the result
-// up (onChecked), so the page can tell whether an identity check that came with a question was
-// answered too. `identityAnswered` = request ids of the identity proofs verified on this page.
-// Inside the "Identity proof missing" warning: paste the identity proof's link or hash to check it
-// on this same page, next to the question it came with.
-function AddProofForm({ onAdd }) {
-  const [value, setValue] = useState("");
-  return (
-    <form
-      className="d-flex mt-2"
-      style={{ gap: "8px" }}
-      onSubmit={(formEvent) => {
-        formEvent.preventDefault();
-        onAdd(value);
-        setValue("");
-      }}
-    >
-      <input
-        type="text"
-        className="form-control form-control-sm"
-        placeholder="Identity proof link or transaction hash"
-        aria-label="Identity proof link or transaction hash"
-        value={value}
-        onChange={(changeEvent) => setValue(changeEvent.target.value)}
-      />
-      <button type="submit" className="btn btn-card-detail-action btn-sm flex-shrink-0" disabled={!value.trim()}>
-        Add
-      </button>
-    </form>
-  );
-}
-
-function ProofSection({ hash, contractAddress, onChecked, identityAnswered, onAddProof }) {
+// One proof on the page: looks the transaction up and decodes what it proved.
+function ProofSection({ hash, contractAddress }) {
   const [result, setResult] = useState(null);
   const [details, setDetails] = useState(null);
   const [context, setContext] = useState(null);
@@ -150,9 +99,7 @@ function ProofSection({ hash, contractAddress, onChecked, identityAnswered, onAd
         if (cancelled) return;
         setResult(found);
         const isProof = found.status === "found" && found.isOurContract && PROOF_KINDS[found.entryPoint]?.isProof;
-        const valid = isProof && found.succeeded !== false;
         if (!isProof || !found.raw) {
-          onChecked(hash, { valid, details: null, context: null });
           return;
         }
         const decoded = await decodeProofDetails(found.raw, contractAddress).catch((decodeError) => {
@@ -161,7 +108,6 @@ function ProofSection({ hash, contractAddress, onChecked, identityAnswered, onAd
         });
         if (cancelled) return;
         if (!decoded) {
-          onChecked(hash, { valid, details: null, context: null });
           return;
         }
         setDetails(decoded);
@@ -172,12 +118,10 @@ function ProofSection({ hash, contractAddress, onChecked, identityAnswered, onAd
         });
         if (cancelled) return;
         setContext(loaded);
-        onChecked(hash, { valid, details: decoded, context: loaded });
       })
       .catch((lookupError) => {
         if (cancelled) return;
         setError(friendlyErrorMessage(lookupError, "Could not look up this proof. Try again in a moment."));
-        onChecked(hash, { valid: false, details: null, context: null });
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -185,7 +129,7 @@ function ProofSection({ hash, contractAddress, onChecked, identityAnswered, onAd
     return () => {
       cancelled = true;
     };
-  }, [hash, contractAddress, onChecked]);
+  }, [hash, contractAddress]);
 
   const kind = result?.status === "found" ? PROOF_KINDS[result.entryPoint] : null;
   const valid = result?.status === "found" && result.isOurContract && kind?.isProof && result.succeeded !== false;
@@ -195,8 +139,6 @@ function ProofSection({ hash, contractAddress, onChecked, identityAnswered, onAd
   const askedByOrganizer = details && event && details.verifierPk === event.issuerPk?.toLowerCase();
   const validityInfo = context?.validityInfo;
   const validityNow = validityInfo ? validityStatus(validityInfo.validity, validityInfo.fromMs) : null;
-  const expectsIdentity = valid && context?.identityRequestIds?.length > 0;
-  const identityShown = expectsIdentity && context.identityRequestIds.some((id) => identityAnswered.has(id));
   const found = result?.status === "found";
 
   return (
@@ -247,36 +189,17 @@ function ProofSection({ hash, contractAddress, onChecked, identityAnswered, onAd
             </div>
           )}
 
-          {expectsIdentity && !identityShown && (
-            <div className="info-hint-card is-warning m-0" role="alert">
-              <CircleAlert size={16} />
-              <div style={{ minWidth: 0 }} className="flex-grow-1">
-                <p className="m-0">
-                  <span className="text-white">Identity proof missing.</span> Whoever asked this question also
-                  asked this holder for an identity check. Without that proof, this answer could come from
-                  someone else's credential (a borrowed key). Ask the holder for both proofs, or for the single
-                  link that checks them together. If you have the identity proof, add it here:
-                </p>
-                <AddProofForm onAdd={onAddProof} />
-              </div>
-            </div>
-          )}
-
           <dl className="proof-receipt-facts verify-proof-facts m-0">
             {valid && details && (
               <>
                 <dt>Proven</dt>
-                <dd>{questionFor(result.entryPoint, details, context)}</dd>
-                {expectsIdentity && (
-                  <>
-                    <dt>Identity</dt>
-                    <dd className={identityShown ? "text-success" : "text-warning"}>
-                      {identityShown
-                        ? "Confirmed by the identity proof on this page (same holder)"
-                        : "Not shown: the identity proof isn't on this page"}
-                    </dd>
-                  </>
-                )}
+                <dd>
+                  {questionLines(result.entryPoint, details, context).map((line, index) => (
+                    <span key={index} className="d-block">
+                      {line}
+                    </span>
+                  ))}
+                </dd>
                 {details.tokenId !== null && (
                   <>
                     <dt>Token</dt>
@@ -376,89 +299,16 @@ function ProofSection({ hash, contractAddress, onChecked, identityAnswered, onAd
   );
 }
 
-// Several proofs checked together (an identity check and the question asked with it, see
-// holderProofs.jsx's combined link): are they all valid, and answered by the same holder?
-function ProofSetSummary({ hashes, checks }) {
-  const done = hashes.filter((hash) => checks[hash]);
-  if (done.length < hashes.length) {
-    return <p className="text-muted small m-0 text-center">Checking {hashes.length} proofs…</p>;
-  }
-  const allValid = hashes.every((hash) => checks[hash].valid);
-  const holders = new Set(hashes.map((hash) => checks[hash].details?.recipientPk).filter(Boolean));
-  const sameHolder = allValid && holders.size === 1 && hashes.every((hash) => checks[hash].details?.recipientPk);
-  const identityAnswered = new Set(
-    hashes.filter((hash) => checks[hash].valid && checks[hash].context?.isIdentity).map((hash) => checks[hash].details.requestId.toLowerCase()),
-  );
-  const missingIdentity = hashes.some((hash) => {
-    const ids = checks[hash].valid ? checks[hash].context?.identityRequestIds || [] : [];
-    return ids.length > 0 && !ids.some((id) => identityAnswered.has(id));
-  });
-  const ok = allValid && !missingIdentity;
-  return (
-    <div className="verify-proof-heading">
-      {ok ? (
-        <UserCheck size={72} strokeWidth={1.25} className="poap-verified-seal-icon" />
-      ) : (
-        <CircleAlert size={72} strokeWidth={1.25} className="text-warning" />
-      )}
-      <p className="m-0 verify-proof-title">
-        {ok ? `All ${hashes.length} proofs are valid` : allValid ? "An identity proof is missing" : "Not every proof is valid"}
-      </p>
-      <p className="m-0 text-muted">
-        {sameHolder
-          ? identityAnswered.size > 0 && !missingIdentity
-            ? "Answered by the same holder, including the identity check: the credential is theirs."
-            : "Answered by the same holder."
-          : allValid
-            ? "These proofs weren't all answered by the same holder."
-            : "Check each proof below."}
-      </p>
-    </div>
-  );
-}
-
 // B8 — public check of a proof receipt (ProofReceipt.jsx's verify link). No wallet: reads the
-// transaction straight from the Midnight indexer, and what it proved from its own transcript. The
-// link can carry several transactions (?tx=a,b) — an identity check and the question asked with it —
-// so they're checked together.
+// transaction straight from the Midnight indexer, and what it proved from its own transcript. One
+// transaction per proof: a credential request's conditions (an identity check and its question) are
+// all answered in the same one. The box still takes several hashes, each checked on its own.
 export default function VerifyProof() {
-  const [searchParams, setSearchParams] = useSearchParams();
+  const [searchParams] = useSearchParams();
   const [txHash, setTxHash] = useState(searchParams.get("tx") || "");
   const [submitted, setSubmitted] = useState(searchParams.get("tx") || "");
   const hashes = useMemo(() => parseProofHashes(submitted), [submitted]);
-  const [checks, setChecks] = useState({});
-  // Drop only the results of hashes no longer on the page: a section that stays (same hash) doesn't
-  // check again, so wiping its result would leave the summary waiting forever.
-  useEffect(
-    () =>
-      setChecks((current) =>
-        Object.fromEntries(Object.entries(current).filter(([hash]) => hashes.includes(hash))),
-      ),
-    [hashes],
-  );
-  const onChecked = useCallback((hash, check) => setChecks((current) => ({ ...current, [hash]: check })), []);
-  const identityAnswered = useMemo(
-    () =>
-      new Set(
-        Object.values(checks)
-          .filter((check) => check.valid && check.context?.isIdentity)
-          .map((check) => check.details.requestId.toLowerCase()),
-      ),
-    [checks],
-  );
-
   const contractAddress = process.env.REACT_APP_MIDNIGHT_CONTRACT_ADDRESS;
-
-  // Adds proofs to the ones on the page (and to the URL, so the page can be shared as a set).
-  const addProof = useCallback(
-    (input) => {
-      const next = parseProofHashes(`${submitted},${input}`).join(",");
-      setSubmitted(next);
-      setTxHash(next);
-      setSearchParams({ tx: next });
-    },
-    [submitted, setSearchParams],
-  );
 
   const verifyForm = (
     <form
@@ -499,18 +349,10 @@ export default function VerifyProof() {
             </div>
           )}
 
-          {hashes.length > 1 && <ProofSetSummary hashes={hashes} checks={checks} />}
-
           {hashes.map((hash, index) => (
             <React.Fragment key={hash}>
               {(index > 0 || hashes.length > 1) && <hr className="verify-proof-divider m-0" />}
-              <ProofSection
-                hash={hash}
-                contractAddress={contractAddress}
-                onChecked={onChecked}
-                identityAnswered={identityAnswered}
-                onAddProof={addProof}
-              />
+              <ProofSection hash={hash} contractAddress={contractAddress} />
             </React.Fragment>
           ))}
 

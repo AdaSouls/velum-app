@@ -20,10 +20,17 @@ export const PROOF_KINDS: Record<string, { title: string; description: string; i
     description: 'Someone proved they hold a valid POAP of the event, without revealing which one or their wallet.',
     isProof: true,
   },
+  // The single-condition circuit of earlier deployments, for older receipts.
   proveCredentialAttribute: {
     title: 'Private detail proof',
     description:
       "Someone proved a private detail of their credential is one of the accepted values, without revealing the value, the credential or their wallet.",
+    isProof: true,
+  },
+  proveCredentialAttributes: {
+    title: 'Private detail proof',
+    description:
+      "The holder a question was addressed to proved their credential's private details match it, without revealing them.",
     isProof: true,
   },
   proveAttributeMembership: {

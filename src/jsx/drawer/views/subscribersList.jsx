@@ -6,7 +6,6 @@ import {
 } from "../../contexts/drawer/drawer.provider";
 import { useUserRoles } from "../../contexts/user-roles/user-roles.provider";
 import { getCredentialUpdateRequests } from "../../../midnight/indexer.service";
-import { getReissueRecord } from "../../../midnight/reissue-store";
 
 const truncateHex = (hex) => {
   if (!hex) return "N/A";
@@ -29,8 +28,8 @@ const truncateHex = (hex) => {
 //
 // Credential update requests (credential-update.ts): the organizer sees which holders asked for an
 // update and reviews each one (reviewCredentialUpdate.jsx). Only the organizer: the request is
-// sealed to their own inbox key. A re-issue this identity left half done (old token burned, new one
-// not minted yet, reissue-store.ts) shows Finish Re-issue on the burned row.
+// sealed to their own inbox key. A token replaced by reissueCredential shows Re-issued instead of
+// Burned (the new one names it in replacesTokenId).
 export default function SubscribersList() {
   const { subscribers, midnight } = useDrawer();
   const dispatch = useDrawerDispatch();
@@ -46,6 +45,7 @@ export default function SubscribersList() {
   const myPk = midnight?.provider?.address;
   const canRevoke = Boolean(event && myPk) && (isAdmin || myPk === event.issuerPk);
   const isOrganizer = Boolean(event && myPk) && myPk === event.issuerPk;
+  const replacedIds = new Set(tokens.map((token) => token.replacesTokenId).filter((id) => id != null).map(String));
 
   // tokenId → its pending update request, for this event.
   const [pendingUpdates, setPendingUpdates] = useState({});
@@ -75,9 +75,6 @@ export default function SubscribersList() {
   });
   const openReview = (token) => {
     dispatch({ type: "SHOW_REVIEW_UPDATE", payload: reviewContext(token, { request: pendingUpdates[String(token.tokenId)] }) });
-  };
-  const openFinish = (token, record) => {
-    dispatch({ type: "SHOW_REVIEW_UPDATE", payload: reviewContext(token, { resume: record }) });
   };
 
   const openRevoke = (token) => {
@@ -122,7 +119,7 @@ export default function SubscribersList() {
                   </p>
                 </div>
                 <span className={`badge flex-shrink-0 ${token.isBurned ? "bg-secondary" : "status-badge-active"}`}>
-                  {token.isBurned ? "Burned" : "Active"}
+                  {!token.isBurned ? "Active" : replacedIds.has(String(token.tokenId)) ? "Re-issued" : "Burned"}
                 </span>
                 {isOrganizer && !token.isBurned && pendingUpdates[String(token.tokenId)] && (
                   <button
@@ -133,17 +130,6 @@ export default function SubscribersList() {
                   >
                     <RefreshCw size={14} className="mr-1" />
                     Review Update
-                  </button>
-                )}
-                {isOrganizer && token.isBurned && getReissueRecord(event.eventId, token.tokenId) && (
-                  <button
-                    type="button"
-                    className="btn btn-card-detail-action btn-sm flex-shrink-0"
-                    onClick={() => openFinish(token, getReissueRecord(event.eventId, token.tokenId))}
-                    aria-label={`Finish re-issuing POAP #${token.tokenId}`}
-                  >
-                    <RefreshCw size={14} className="mr-1" />
-                    Finish Re-issue
                   </button>
                 )}
                 {canRevoke && !token.isBurned && (

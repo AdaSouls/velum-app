@@ -29,14 +29,15 @@ const RECIPIENT = 'c3'.repeat(32);
 
 // Records written before addressed requests (AdaSouls/velum f6f6114) have 4 fields; now there's a
 // 5th, the recipient (all-zero = open request).
-function program({ tokenIdLe, recipient }: { tokenIdLe?: string; recipient?: string } = {}) {
+function program({ tokenIdLe, recipient, record: given }: { tokenIdLe?: string; recipient?: string; record?: any } = {}) {
   const record =
-    recipient === undefined
+    given ??
+    (recipient === undefined
       ? { value: [bytes(VERIFIER), bytes(EVENT), bytes(''), bytes('')], alignment: [atom(32), atom(32), atom(32), atom(32)] }
       : {
           value: [bytes(VERIFIER), bytes(EVENT), bytes(''), bytes(''), bytes(recipient)],
           alignment: [atom(32), atom(32), atom(32), atom(32), atom(32)],
-        };
+        });
   const ops: any[] = [
     { dup: { n: 0 } },
     ledgerField('0b'),
@@ -63,6 +64,7 @@ describe('readProofDetails', () => {
       setRoot: '0'.repeat(64),
       recipientPk: null,
       tokenId: 0n,
+      conditions: null,
     });
   });
 
@@ -80,6 +82,27 @@ describe('readProofDetails', () => {
 
   it('has no token for an anonymous proof', () => {
     expect(readProofDetails(program())?.tokenId).toBeNull();
+  });
+
+  it('reads every used condition of a credential request (proveCredentialAttributes)', () => {
+    const DNI = '0d'.repeat(32);
+    const GRADE = '01'.repeat(32);
+    // { verifier, eventId, recipient, 4 × { fieldId, setRoot } }; unused slots are empty atoms.
+    const values = [VERIFIER, EVENT, RECIPIENT, DNI, 'aa'.repeat(32), GRADE, 'bb'.repeat(32), '', '', '', ''].map(bytes);
+    const details = readProofDetails(program({ record: { value: values, alignment: values.map(() => atom(32)) } }));
+    expect(details).toMatchObject({
+      requestId: REQUEST,
+      verifierPk: VERIFIER,
+      eventId: EVENT,
+      recipientPk: RECIPIENT,
+      fieldId: DNI,
+      setRoot: 'aa'.repeat(32),
+      tokenId: null,
+      conditions: [
+        { slot: 0, fieldId: DNI, setRoot: 'aa'.repeat(32) },
+        { slot: 1, fieldId: GRADE, setRoot: 'bb'.repeat(32) },
+      ],
+    });
   });
 
   it('returns null for a transcript without a request lookup', () => {

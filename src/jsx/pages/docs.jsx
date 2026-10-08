@@ -324,10 +324,11 @@ const Docs = () => {
                 <p>
                   <strong>Update requests:</strong> when a holder's document changes, they can ask you
                   to issue their credential again. Rows with a request show <strong>Review Update</strong>:
-                  you see the old and the new number, then either dismiss it or re-issue in three
-                  guided steps (review, revoke the old credential, issue the new one). If you stop
-                  between the last two, <strong>Finish Re-issue</strong> on that row picks it up again.
-                  Only Credential events created after this feature accept requests.
+                  you see the old and the new number, then either dismiss it or re-issue it. A re-issue
+                  is one transaction: the old credential is replaced by the new one, or nothing changes.
+                  It doesn't use up the event's supply, but the event must be active and not expired.
+                  The old row then shows <strong>Re-issued</strong>. Only Credential events created
+                  after this feature accept requests.
                 </p>
               </Section>
 
@@ -358,10 +359,10 @@ const Docs = () => {
                   <li>
                     <strong>Identity check</strong> (credentials with an identity document): type the
                     number on the person's document and their identity code (it comes in their link).
-                    It's published as a second request together with your question; the holder
-                    answers both at once, one signature each, and sends you one link that checks both.
-                    It's on by default: turning it off asks you to confirm, because without it someone
-                    could answer with a borrowed key.
+                    It goes in the same request as your question, and the holder answers both in a
+                    single proof: neither can be answered without the other. It's on by default:
+                    turning it off asks you to confirm, because without it someone could answer with
+                    a borrowed key.
                   </li>
                 </ul>
               </Section>
@@ -438,9 +439,8 @@ const Docs = () => {
                   <li>
                     <strong>Identity documents:</strong> if your credential carries one, the link also
                     carries your identity code (never the number). Give it only to whoever checks your
-                    document. An identity check and the question that came with it are answered
-                    together with <strong>Respond</strong>, and you get one link that checks both
-                    proofs: send that one.
+                    document. An identity check and the question that came with it are one request:
+                    <strong>Respond</strong> answers both in a single proof.
                   </li>
                   <li>
                     <strong>Request Update:</strong> if your document changes, ask the organizer to
@@ -475,11 +475,8 @@ const Docs = () => {
                   <li>whether the credential was revoked since</li>
                 </ul>
                 <p>
-                  A link can check several proofs at once (an identity check and the question asked
-                  with it). The page says whether they're all valid and answered by the same holder.
-                  If you see only the answer to a question whose asker also requested an identity
-                  check, it warns <strong>Identity proof missing</strong>: without it, the answer
-                  could come from someone else's credential.
+                  A request with an identity check is answered in one proof, so its link shows both
+                  the identity check and the question.
                 </p>
               </Section>
 

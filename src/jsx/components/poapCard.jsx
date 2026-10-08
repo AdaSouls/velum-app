@@ -708,6 +708,12 @@ const PoapCard = forwardRef(({ poap, isExpanded = false, onExpand = () => {}, on
                         {!isBurned && updateRequest?.status === "dismissed" && (
                           <p className="m-0 mt-2 small text-muted">The organizer dismissed your last update request.</p>
                         )}
+                        {isBurned && updateRequest?.status === "reissued" && (
+                          <p className="m-0 mt-2 small text-muted">
+                            Replaced by the updated credential
+                            {updateRequest.reissuedTokenId != null ? ` (POAP #${updateRequest.reissuedTokenId})` : ""}.
+                          </p>
+                        )}
                       </div>
                       <hr style={{ marginTop: "18px", marginBottom: "18px" }} />
                     </>

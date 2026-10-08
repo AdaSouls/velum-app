@@ -65,7 +65,7 @@ export function computeAttributeLeaf(
 }
 
 // Per-credential private attributes (B7) — see credential-delivery.ts. Both are pure circuits, so
-// the leaves computed here are exactly what mintTo's credentials tree and proveCredentialAttribute
+// the leaves computed here are exactly what mintTo's credentials tree and proveCredentialAttributes
 // check. holderPk in computeCredentialLeaf is the recipient's holder_pk(organizer), the same value
 // mintTo received (holder_secret_pk inside the contract is that same hash, just not disclosed).
 export function computeCredentialAttrLeaf(fieldId: Uint8Array, value: Uint8Array, rand: Uint8Array): Uint8Array {
@@ -272,7 +272,7 @@ export class PoapContractService {
   // the event (the common case) must pass ev.metadataURI/ev.privateMetadataCommit explicitly. The
   // defaults below (empty URI, all-zero commit) mean "this token has no metadata", not "inherit".
   // credentialAttributesRoot commits this recipient's own private attributes into the credential
-  // (poap.compact's credentials tree, proven later via proveCredentialAttribute); all-zero = none.
+  // (poap.compact's credentials tree, proven later via proveCredentialAttributes); all-zero = none.
   async mintTo(
     eventId: Uint8Array,
     recipientPk: Uint8Array,
@@ -304,10 +304,9 @@ export class PoapContractService {
   // a real membership path — see merkle.ts's buildMerklePath).
   //
   // recipient: the holder pseudonym (getHolderPk under the event's organizer) that must answer,
-  // or all-zero for an open request any holder of the event can answer. proveCredentialAttribute
-  // only accepts addressed requests, answered by that recipient; proveTokenOwnership and
-  // proveEventAttendance enforce it when set. Always explicit: an open request about a credential
-  // attribute is publishable but can never be answered.
+  // or all-zero for an open request any holder of the event can answer. proveTokenOwnership and
+  // proveEventAttendance enforce it when set. Questions about a credential's private attributes use
+  // publishCredentialRequest instead: a disclosure request can't be answered for them.
   async publishDisclosureRequest(
     label: Uint8Array,
     eventId: Uint8Array,
@@ -360,17 +359,48 @@ export class PoapContractService {
     return this.deployedContract.callTx.proveEventAttendance(requestId, credAttrRoot, credPath);
   }
 
-  // Anonymous + predicate over one of THIS holder's credential attributes (B7).
-  async proveCredentialAttribute(
+  // A question about ONE holder's credential: up to CREDENTIAL_CONDITION_SLOTS conditions
+  // (fieldId, setRoot), answered all together or not at all (proveCredentialAttributes) — an
+  // identity check and the question asked with it can't be answered apart. Always addressed:
+  // recipient is the holder pseudonym. Unused slots are all-zero; slot 0 must be used. Returns the
+  // derived requestId (private.result).
+  async publishCredentialRequest(
+    label: Uint8Array,
+    eventId: Uint8Array,
+    recipient: Uint8Array,
+    conditions: { fieldId: Uint8Array; setRoot: Uint8Array }[],
+  ) {
+    return this.deployedContract.callTx.publishCredentialRequest(label, eventId, recipient, conditions);
+  }
+
+  // Answers a credential request in one proof, from one credential: per slot the attribute's value
+  // and rand, its path in the credential's attribute tree (depth 8) and in the condition's set
+  // (depth 16). Unused slots take zeros and any well-formed paths (holder-proofs.ts#proveAttributes).
+  async proveCredentialAttributes(
     requestId: Uint8Array,
-    value: Uint8Array,
-    rand: Uint8Array,
-    attributePath: MerkleTreePathArg,
-    setMembershipPath: MerkleTreePathArg,
+    values: Uint8Array[],
+    rands: Uint8Array[],
+    attributePaths: MerkleTreePathArg[],
+    setMembershipPaths: MerkleTreePathArg[],
     credPath: MerkleTreePathArg,
   ) {
-    return this.deployedContract.callTx.proveCredentialAttribute(
-      requestId, value, rand, attributePath, setMembershipPath, credPath,
+    return this.deployedContract.callTx.proveCredentialAttributes(
+      requestId, values, rands, attributePaths, setMembershipPaths, credPath,
+    );
+  }
+
+  // Replaces a live credential in one transaction (issuer or admin): burns tokenId and mints its
+  // replacement to the same holder pseudonym and event, closing its pending update request. Doesn't
+  // use up the event's supply, but the event must be active and not expired and its issuer not
+  // blocked; a failed re-issue leaves the old credential untouched.
+  async reissueCredential(
+    tokenId: bigint,
+    newMetadataURI: string,
+    newPrivateMetadataCommit: Uint8Array,
+    newCredentialAttributesRoot: Uint8Array,
+  ) {
+    return this.deployedContract.callTx.reissueCredential(
+      tokenId, newMetadataURI, newPrivateMetadataCommit, newCredentialAttributesRoot,
     );
   }
 

@@ -2,7 +2,6 @@ import { VISIBILITY_PREFIX } from './collection-share';
 import { CREDENTIAL_PACKAGE_PREFIX } from './credential-store';
 import { PROOF_HISTORY_PREFIX } from './proof-history';
 import { ORGANIZER_PROFILE_PREFIX } from './organizer-profile';
-import { REISSUE_PREFIX } from './reissue-store';
 import {
   getBackupContext,
   getBackupStatus,
@@ -46,7 +45,6 @@ const BACKED_UP_PREFIXES = [
   CREDENTIAL_PACKAGE_PREFIX,
   PROOF_HISTORY_PREFIX,
   ORGANIZER_PROFILE_PREFIX,
-  REISSUE_PREFIX,
 ];
 
 export type BackupEnvelope = {

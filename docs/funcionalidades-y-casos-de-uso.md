@@ -97,14 +97,15 @@ de credencial…), usada para describir y filtrar.
     años". Se cuenta desde el día en que se pregunta.
   - **Control de identidad** (credenciales con un documento de identidad): el verificador escribe el
     número del documento que tiene delante y el código de identidad del holder (viene en su link).
-    Se publica como un segundo pedido junto con la pregunta; el holder responde los dos juntos y
-    manda un solo link que verifica las dos pruebas. Viene activado: apagarlo pide confirmación.
+    Va en el mismo pedido que la pregunta y el holder responde las dos cosas en una sola prueba:
+    no se puede responder una sin la otra. Viene activado: apagarlo pide confirmación.
 - **Documentos de identidad en las credenciales**: un tipo de campo privado con país y tipo de
   documento fijos (por ejemplo "DNI, Argentina"). Al emitir se escribe el número; en la cadena solo
   queda una huella con sal. Evita que alguien responda con la credencial de un amigo.
 - **Pedidos de actualización**: en la lista de holders, "Review Update" muestra el número viejo y el
-  nuevo; se rechaza o se reemite en tres pasos guiados (revisar, revocar, emitir). Si se corta entre
-  los dos últimos, "Finish Re-issue" lo retoma.
+  nuevo; se rechaza o se reemite. La reemisión es una sola transacción: reemplaza la credencial
+  vieja por la nueva o no cambia nada. No gasta cupo, pero el evento tiene que estar activo y sin
+  vencer. La fila vieja queda como "Re-issued".
 - **Perfil de organizador verificado**: el admin puede registrar organizadores (insignia opcional;
   no hace falta para crear eventos).
 
@@ -125,8 +126,8 @@ de credencial…), usada para describir y filtrar.
 - **Prove Ownership Anonymously**: "tengo un POAP válido de este evento", sin decir cuál.
 - **Prove a Private Detail**: responde las preguntas del organizador sin revelar el valor, qué
   credencial es ni la wallet. Si el valor no califica, el botón se desactiva sin tocar la cadena.
-  Un control de identidad y la pregunta que vino con él se responden juntos ("Respond", una firma
-  cada uno), y se obtiene un solo link que verifica las dos pruebas.
+  Un control de identidad y la pregunta que vino con él son un solo pedido: "Respond" los responde
+  en una sola prueba, con una firma.
 - **Código de identidad**: si la credencial tiene un documento, el holder ve el documento tapado y
   su código. El link para quien pregunta lleva el código, nunca el número.
 - **Request Update**: si cambia su documento, le pide al organizador que reemita la credencial. El
@@ -145,9 +146,7 @@ de credencial…), usada para describir y filtrar.
   **hasta cuándo es válido**:
   - Subscription: desde esa prueba.
   - Event o Credential: desde la emisión, cuando la prueba nombra el token.
-- **Varias pruebas en un link** (`?tx=a,b`): verifica todas y dice si las respondió el mismo holder.
-  Si una respuesta venía con un control de identidad del mismo verificador y esa prueba no está,
-  avisa "Identity proof missing".
+- **Control de identidad y pregunta en una prueba**: el link de la respuesta muestra las dos cosas.
 - No hace falta cuenta, wallet ni confiar en quien muestra la prueba: la página lee la transacción
   directamente de la cadena.
 

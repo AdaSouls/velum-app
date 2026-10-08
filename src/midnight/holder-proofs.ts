@@ -1,19 +1,24 @@
 // Anonymous proofs a holder answers from their own POAP (holderProofs.jsx):
 //   - proveEventAttendance: "I hold a live credential of this event" — reveals neither the token
 //     nor the wallet. Works for any token (claim() and mintTo() both add the credential leaf; the
-//     attribute root is all-zero when there are no private attributes).
-//   - proveCredentialAttribute: same, plus "my <field> is one of the values this request accepts".
-// Both answer a DisclosureRequest someone else published (normally the organizer), so the holder
-// never publishes anything under their own caller_pk. Attribute requests are always addressed to
-// one holder (their holder_pk under the event's organizer): only that holder can answer, and the
-// request already names them, so that proof hides the value but not who answered.
+//     attribute root is all-zero when there are no private attributes). Answers a DisclosureRequest.
+//   - proveCredentialAttributes: answers a CredentialRequest — up to four conditions on this
+//     holder's own private attributes ("my <field> is one of these values"), all in one proof, from
+//     one credential, or none. Always addressed to one holder (their holder_pk under the event's
+//     organizer): the proof hides the values but not who answered.
+// The holder never publishes anything under their own caller_pk.
 //
 // Identity documents (flow 12): a verifier who checked the holder's document asks "is it this one?"
-// with a set of exactly one value, computeIdentityValue(document, salt). Nothing about the value is
-// published (the rule is just { op: 'identity' }), so the holder checks it locally: their own value
-// must rebuild the request's setRoot. The real question (a grade…) comes as a second request from the
-// same verifier; the two are answered together (groupAnswerable), one signature each.
-import { getAllDisclosureRequests, type IndexedDisclosureRequest } from './indexer.service';
+// with a set of exactly one value, computeIdentityValue(document, salt), as one condition of the
+// same request as the real question (a grade…). Nothing about that value is published, so the
+// holder checks it locally: their own value must rebuild the condition's setRoot. Since the whole
+// request is answered at once, the question can't be answered without the identity check.
+import {
+  getAllDisclosureRequests,
+  getCredentialRequests,
+  type IndexedCredentialRequest,
+  type IndexedDisclosureRequest,
+} from './indexer.service';
 import { buildMerkleTree } from './merkle';
 import { encodeAttributeValue } from './attribute-value-codec';
 import { computeCredentialAttrLeaf } from './contract.service';
@@ -40,12 +45,12 @@ type Service = {
   getEncryptionKeyPair(issuerId: Uint8Array): Promise<any>;
   getState(): Promise<{ ledger: { credentials: any } }>;
   proveEventAttendance(requestId: Uint8Array, credAttrRoot: Uint8Array, credPath: any): Promise<any>;
-  proveCredentialAttribute(
+  proveCredentialAttributes(
     requestId: Uint8Array,
-    value: Uint8Array,
-    rand: Uint8Array,
-    attributePath: any,
-    setMembershipPath: any,
+    values: Uint8Array[],
+    rands: Uint8Array[],
+    attributePaths: any[],
+    setMembershipPaths: any[],
     credPath: any,
   ): Promise<any>;
 };
@@ -68,34 +73,65 @@ export async function loadCredentialPackage(service: Service, token: HolderToken
 
 // ── Requests the holder can answer ────────────────────────────────────────────
 
+// One condition of a credential request, as the holder sees it. `rule` is null when no published
+// rule matches the condition's root; `verified` = its set was already checked against that root
+// (big ranges are checked when the holder proves, see fetchRequestRule). For an identity check:
+// whether the holder's own document rebuilds the root.
+export type AnswerCondition = {
+  slot: number;
+  fieldId: string; // hex
+  setRoot: string; // hex
+  field: CredentialField | null; // null: not a field of this credential
+  label: string;
+  rule: Rule | null;
+  verified: boolean;
+};
+
 export type AnswerableRequest =
   | { kind: 'attendance'; request: IndexedDisclosureRequest }
-  | {
-      kind: 'attribute';
-      request: IndexedDisclosureRequest;
-      field: CredentialField;
-      label: string;
-      // null when no published rule could be found for it. `verified` = its set was already checked
-      // against the on-chain root; big ranges are checked when the holder proves (see fetchRequestRule).
-      // For an identity request: whether the holder's own document rebuilds the root.
-      rule: Rule | null;
-      verified: boolean;
-    };
+  | { kind: 'attribute'; request: IndexedCredentialRequest; conditions: AnswerCondition[] };
+
+// Positions in a credential request (poap.compact's Vector<4, CredentialCondition>).
+export const CREDENTIAL_CONDITION_SLOTS = 4;
 
 const IDENTITY_RULE: Rule = { op: 'identity' };
 
-export const isIdentityRequest = (item: AnswerableRequest) => item.kind === 'attribute' && item.rule?.op === 'identity';
+export const isIdentityCondition = (condition: AnswerCondition) => condition.rule?.op === 'identity';
 
-// The one-value set of an identity request. Built from the raw 32-byte value (not text), the same
+// The one-value set of an identity check. Built from the raw 32-byte value (not text), the same
 // way publishDisclosureRequest.jsx builds it from the number and code it was given.
 export async function identitySetTree(valueHex: string) {
   return buildMerkleTree([fromHex(valueHex)], 16);
 }
 
-// Plain requests (attendance / ownership) and requests about one of this event's credential
-// fields. Requests about event-level attributes are the organizer's to answer, not the holder's.
-// Only requests this holder can actually answer: plain ones that are open or addressed to them,
-// attribute ones addressed to them (the contract rejects open attribute requests).
+async function answerCondition(
+  request: IndexedCredentialRequest,
+  condition: { slot: number; fieldId: string; setRoot: string },
+  fields: Map<string, CredentialField>,
+  pkg: CredentialPackage | null,
+): Promise<AnswerCondition> {
+  const fieldId = condition.fieldId.toLowerCase();
+  const field = fields.get(fieldId) ?? null;
+  const base = {
+    slot: condition.slot,
+    fieldId,
+    setRoot: condition.setRoot.toLowerCase(),
+    field,
+    label: field?.label || 'Unknown field',
+  };
+  if (!field) return { ...base, rule: null, verified: false };
+  if (isIdentityField(field)) {
+    const own = pkg?.fields.find((f) => f.fieldId === fieldId);
+    const matches = own ? hex((await identitySetTree(own.valueHex)).rootBytes) === base.setRoot : false;
+    return { ...base, rule: IDENTITY_RULE, verified: matches };
+  }
+  const found = await fetchRequestRule(request.requestId, base.setRoot).catch(() => null);
+  return { ...base, rule: found?.rule ?? null, verified: found?.verified ?? false };
+}
+
+// What this holder can answer on this event: plain requests (attendance / ownership) that are open
+// or addressed to them, and the credential requests addressed to them (newest first). Requests
+// about event-level attributes are the organizer's to answer, not the holder's.
 export async function listAnswerableRequests(
   eventIdHex: string,
   credentialFields: CredentialField[],
@@ -103,75 +139,28 @@ export async function listAnswerableRequests(
   pkg: CredentialPackage | null = null,
 ): Promise<AnswerableRequest[]> {
   const me = holderPkHex.toLowerCase();
-  const requests = (await getAllDisclosureRequests()).filter((r) => r.eventId === eventIdHex);
-  const fields = new Map(credentialFields.map((f) => [f.fieldId, f]));
+  const fields = new Map(credentialFields.map((f) => [f.fieldId.toLowerCase(), f]));
+  const [disclosures, credentialRequests] = await Promise.all([
+    getAllDisclosureRequests(),
+    getCredentialRequests({ recipientPk: me, eventId: eventIdHex }),
+  ]);
   const answerable: AnswerableRequest[] = [];
-  for (const request of requests) {
+  for (const request of disclosures.filter((r) => r.eventId === eventIdHex)) {
     const recipient = requestRecipient(request);
-    if (isOwnershipRequest(request)) {
-      if (!recipient || recipient === me) answerable.push({ kind: 'attendance', request });
-    } else if (fields.has(request.fieldId) && recipient === me) {
-      const field = fields.get(request.fieldId) as CredentialField;
-      if (isIdentityField(field)) {
-        const own = pkg?.fields.find((f) => f.fieldId === request.fieldId);
-        const matches = own
-          ? hex((await identitySetTree(own.valueHex)).rootBytes) === request.setRoot.toLowerCase()
-          : false;
-        answerable.push({ kind: 'attribute', request, field, label: field.label, rule: IDENTITY_RULE, verified: matches });
-        continue;
-      }
-      const found = await fetchRequestRule(request.requestId, request.setRoot).catch(() => null);
-      answerable.push({
-        kind: 'attribute',
-        request,
-        field,
-        label: field.label,
-        rule: found?.rule ?? null,
-        verified: found?.verified ?? false,
-      });
-    }
+    if (isOwnershipRequest(request) && (!recipient || recipient === me)) answerable.push({ kind: 'attendance', request });
+  }
+  const newestFirst = [...credentialRequests]
+    .filter((request) => request.recipientPk?.toLowerCase() === me && request.eventId === eventIdHex)
+    .sort((a, b) => (b.publishedBlock ?? -1) - (a.publishedBlock ?? -1));
+  for (const request of newestFirst) {
+    const conditions = await Promise.all(
+      [...request.conditions]
+        .sort((a, b) => a.slot - b.slot)
+        .map((condition) => answerCondition(request, condition, fields, pkg)),
+    );
+    answerable.push({ kind: 'attribute', request, conditions });
   }
   return answerable;
-}
-
-// How far apart (in blocks) an identity check and its question can be published and still count as
-// asked together: publishDisclosureRequest.jsx sends the two back to back, a minute or two apart.
-export const ASKED_TOGETHER_BLOCKS = 100;
-
-// Requests to answer together: an identity check and the one question the same verifier published
-// right after it (publishDisclosureRequest.jsx asks at most one with each check). Pairing by block,
-// not just by verifier: the same verifier asking again later (say, after a check with the wrong
-// document) makes a new pair, so an old unanswerable check can't block the new one. Everything else
-// stays on its own. Identity first inside a group; newest groups first.
-export function groupAnswerable(items: AnswerableRequest[]): AnswerableRequest[][] {
-  const block = (item: AnswerableRequest) => item.request.publishedBlock ?? null;
-  const identities = items.filter(isIdentityRequest);
-  const groups = new Map<AnswerableRequest, AnswerableRequest[]>(identities.map((item) => [item, [item]]));
-  const paired = new Set<AnswerableRequest>();
-  for (const item of items) {
-    if (item.kind !== 'attribute' || isIdentityRequest(item)) continue;
-    const at = block(item);
-    const candidates = identities.filter((identity) => {
-      if (identity.request.verifierPk !== item.request.verifierPk) return false;
-      if ((groups.get(identity) as AnswerableRequest[]).length > 1) return false; // already has its question
-      const idAt = block(identity);
-      // Without blocks (older indexer) any unpaired check of the same verifier will do.
-      return at === null || idAt === null || (idAt <= at && at - idAt <= ASKED_TOGETHER_BLOCKS);
-    });
-    // The closest check before it.
-    const identity = candidates.sort((a, b) => (block(b) ?? 0) - (block(a) ?? 0))[0];
-    if (identity) {
-      (groups.get(identity) as AnswerableRequest[]).push(item);
-      paired.add(item);
-    }
-  }
-  const out: AnswerableRequest[][] = [];
-  for (const item of items) {
-    if (paired.has(item)) continue;
-    out.push(groups.get(item) ?? [item]);
-  }
-  const newest = (group: AnswerableRequest[]) => Math.max(...group.map((item) => block(item) ?? -1));
-  return out.sort((a, b) => newest(b) - newest(a));
 }
 
 // One set tree per rule, shared by the root check and the proof: a range can take seconds to build.
@@ -201,7 +190,7 @@ const EAGER_CHECK_MAX = 2000;
 // The question behind a request's setRoot (published by publishDisclosureRequest.jsx). Anyone can
 // post under a requestId, so only a rule whose set rebuilds the on-chain root counts. Small rules
 // are checked right away; a lone big range (a date range can be ~40,000 values, several seconds) is
-// returned unchecked and checked when the holder proves (proveAttribute) — or by the verify page.
+// returned unchecked and checked when the holder proves (proveAttributes) — or by the verify page.
 export async function fetchRequestRule(
   requestIdHex: string,
   setRootHex: string,
@@ -252,37 +241,60 @@ export async function proveAttendance(
   return { txHash: txHashOf(result) };
 }
 
-export async function proveAttribute(
-  service: Service,
-  token: HolderToken,
-  request: IndexedDisclosureRequest,
-  rule: Rule,
-  pkg: CredentialPackage,
-): Promise<{ txHash: string | null }> {
-  const field = pkg.fields.find((f) => f.fieldId === request.fieldId);
-  if (!field) throw new Error("This credential has no value for the field this request asks about.");
+// Builds one condition's answer: its value and rand, the attribute's path in the credential's
+// attribute tree and the value's path in the condition's set.
+async function conditionAnswer(condition: AnswerCondition, pkg: CredentialPackage, attributeTree: any) {
+  const field = pkg.fields.find((f) => f.fieldId === condition.fieldId);
+  if (!field) throw new Error(`This credential has no value for "${condition.label}".`);
+  if (!condition.rule) throw new Error(`The accepted values for "${condition.label}" aren't available.`);
   const value = fromHex(field.valueHex);
   const rand = fromHex(field.randHex);
-
-  const attributeTree = await credentialAttributeTree(pkg.fields);
   const attributePath = attributeTree.pathForLeaf(computeCredentialAttrLeaf(fromHex(field.fieldId), value, rand));
-
-  const setTree = rule.op === 'identity' ? await identitySetTree(field.valueHex) : await setTreeFor(rule);
-  if (hex(setTree.rootBytes) !== request.setRoot.toLowerCase()) {
+  const identity = condition.rule.op === 'identity';
+  const setTree = identity ? await identitySetTree(field.valueHex) : await setTreeFor(condition.rule);
+  if (hex(setTree.rootBytes) !== condition.setRoot) {
     throw new Error(
-      rule.op === 'identity'
+      identity
         ? "This identity check is for a different document (or identity code) than the one on your credential."
-        : "The accepted values published for this question don't match it on-chain, so the proof would fail.",
+        : `The accepted values published for "${condition.label}" don't match the request on-chain, so the proof would fail.`,
     );
   }
   let setPath;
   try {
     setPath = setTree.pathForLeaf(value);
   } catch {
-    throw new Error("Your value isn't one of the values this request accepts, so the proof would fail.");
+    throw new Error(`Your ${condition.label} isn't one of the values this request accepts, so the proof would fail.`);
   }
+  return { value, rand, attributePath, setPath };
+}
 
+// Answers every condition of a credential request in one proof (proveCredentialAttributes). Each
+// answer goes in its condition's slot; unused slots take zero values and slot 0's paths (the circuit
+// ignores them, it only needs well-formed paths of the right depth: 8 and 16).
+export async function proveAttributes(
+  service: Service,
+  token: HolderToken,
+  request: IndexedCredentialRequest,
+  conditions: AnswerCondition[],
+  pkg: CredentialPackage,
+): Promise<{ txHash: string | null }> {
+  const attributeTree = await credentialAttributeTree(pkg.fields);
+  const answers = new Map<number, Awaited<ReturnType<typeof conditionAnswer>>>();
+  for (const condition of conditions) {
+    answers.set(condition.slot, await conditionAnswer(condition, pkg, attributeTree));
+  }
+  const first = answers.get(0);
+  if (!first) throw new Error("This request has no first condition, so it can't be answered.");
+  const zero = new Uint8Array(32);
+  const slots = Array.from({ length: CREDENTIAL_CONDITION_SLOTS }, (_, slot) => answers.get(slot));
   const credPath = await credentialPath(service, token, pkg.credAttrRoot);
-  const result = await service.proveCredentialAttribute(fromHex(request.requestId), value, rand, attributePath, setPath, credPath);
+  const result = await service.proveCredentialAttributes(
+    fromHex(request.requestId),
+    slots.map((answer) => answer?.value ?? zero),
+    slots.map((answer) => answer?.rand ?? zero),
+    slots.map((answer) => (answer ?? first).attributePath),
+    slots.map((answer) => (answer ?? first).setPath),
+    credPath,
+  );
   return { txHash: txHashOf(result) };
 }

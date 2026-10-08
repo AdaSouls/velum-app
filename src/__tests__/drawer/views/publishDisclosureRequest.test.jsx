@@ -3,7 +3,7 @@ import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import PublishDisclosureRequest from '../../../jsx/drawer/views/publishDisclosureRequest';
 import { mockDrawerContext, renderWithProviders } from '../../../testUtils';
-import { getDisclosureRequestsByVerifier, getTokensByEvent } from '../../../midnight/indexer.service';
+import { getCredentialRequests, getTokensByEvent } from '../../../midnight/indexer.service';
 import { buildMerkleTree } from '../../../midnight/merkle';
 import { publishRequestRule } from '../../../midnight/disclosure-sets';
 
@@ -11,7 +11,7 @@ jest.mock('../../../midnight/disclosure-sets', () => ({
   publishRequestRule: jest.fn().mockResolvedValue(undefined),
 }));
 jest.mock('../../../midnight/indexer.service', () => ({
-  getDisclosureRequestsByVerifier: jest.fn(),
+  getCredentialRequests: jest.fn(),
   getTokensByEvent: jest.fn(),
 }));
 // Pulls in @midnight-ntwrk/compact-runtime (WASM-bindgen, unloadable under this project's Jest —
@@ -30,15 +30,15 @@ const FIELD = { fieldId: 'cc'.repeat(32), label: 'Region' };
 const EVENT_ID_HEX = 'aa'.repeat(32);
 const RECIPIENT = 'b7'.repeat(32);
 
-// Every request is addressed to one holder (publishDisclosureRequest's 5th argument).
+// Every request is addressed to one holder (publishCredentialRequest's 3rd argument).
 const fillRecipient = (key = RECIPIENT) => userEvent.type(screen.getByLabelText(/holder's key/i), key);
 
-function buildDrawerValue({ publishDisclosureRequest, address = 'dd'.repeat(32) } = {}) {
+function buildDrawerValue({ publishCredentialRequest, address = 'dd'.repeat(32) } = {}) {
   return {
     ...mockDrawerContext,
     midnight: {
       ...mockDrawerContext.midnight,
-      provider: { address, wallet: 'Lace', service: { publishDisclosureRequest } },
+      provider: { address, wallet: 'Lace', service: { publishCredentialRequest } },
     },
     disclosureEvent: { eventId: EVENT_ID_HEX, fields: [FIELD] },
   };
@@ -64,7 +64,7 @@ describe('PublishDisclosureRequest drawer view', () => {
   });
 
   it("prefills the holder's key when opened from a request link", async () => {
-    const drawerValue = buildDrawerValue({ publishDisclosureRequest: jest.fn() });
+    const drawerValue = buildDrawerValue({ publishCredentialRequest: jest.fn() });
     drawerValue.disclosureEvent = { eventId: EVENT_ID_HEX, fields: [FIELD], recipient: RECIPIENT };
     renderWithProviders(<PublishDisclosureRequest />, { drawerValue });
     expect(screen.getByLabelText(/holder's key/i)).toHaveValue(RECIPIENT);
@@ -72,24 +72,23 @@ describe('PublishDisclosureRequest drawer view', () => {
   });
 
   it('shows a no-attributes message when the event has no private attribute fields', () => {
-    const drawerValue = buildDrawerValue({ publishDisclosureRequest: jest.fn() });
+    const drawerValue = buildDrawerValue({ publishCredentialRequest: jest.fn() });
     drawerValue.disclosureEvent = { eventId: EVENT_ID_HEX, fields: [] };
     renderWithProviders(<PublishDisclosureRequest />, { drawerValue });
     expect(screen.getByText(/no private attributes to ask about/i)).toBeInTheDocument();
   });
 
   it('falls back to the indexer for the requestId, builds a depth-16 set tree, and publishes the accepted values', async () => {
-    const publishDisclosureRequest = jest.fn().mockResolvedValue({ txHash: '0xabc' });
+    const publishCredentialRequest = jest.fn().mockResolvedValue({ txHash: '0xabc' });
     publishRequestRule.mockResolvedValue(undefined);
-    const drawerValue = buildDrawerValue({ publishDisclosureRequest });
-    getDisclosureRequestsByVerifier.mockResolvedValue([
+    const drawerValue = buildDrawerValue({ publishCredentialRequest });
+    getCredentialRequests.mockResolvedValue([
       {
         requestId: 'ee'.repeat(32),
         verifierPk: drawerValue.midnight.provider.address,
         eventId: EVENT_ID_HEX,
-        fieldId: FIELD.fieldId,
-        setRoot: Buffer.from(new Uint8Array(32).fill(5)).toString('hex'),
         recipientPk: RECIPIENT,
+        conditions: [{ slot: 0, fieldId: FIELD.fieldId, setRoot: Buffer.from(new Uint8Array(32).fill(5)).toString('hex') }],
       },
     ]);
 
@@ -101,12 +100,19 @@ describe('PublishDisclosureRequest drawer view', () => {
     await fillRecipient();
     await userEvent.click(screen.getByRole('button', { name: /^publish request$/i }));
 
-    await waitFor(() => expect(publishDisclosureRequest).toHaveBeenCalled());
-    const [, eventIdArg, fieldIdArg, setRootArg, recipientArg] = publishDisclosureRequest.mock.calls[0];
+    await waitFor(() => expect(publishCredentialRequest).toHaveBeenCalled());
+    const [, eventIdArg, recipientArg, conditions] = publishCredentialRequest.mock.calls[0];
     expect(eventIdArg).toEqual(Uint8Array.from(Buffer.from(EVENT_ID_HEX, 'hex')));
-    expect(fieldIdArg).toEqual(Uint8Array.from(Buffer.from(FIELD.fieldId, 'hex')));
-    expect(setRootArg).toEqual(new Uint8Array(32).fill(5));
     expect(recipientArg).toEqual(Uint8Array.from(Buffer.from(RECIPIENT, 'hex')));
+    // One used slot, three all-zero ones.
+    expect(conditions).toHaveLength(4);
+    expect(conditions[0]).toEqual({ fieldId: Uint8Array.from(Buffer.from(FIELD.fieldId, 'hex')), setRoot: new Uint8Array(32).fill(5) });
+    expect(conditions[1]).toEqual({ fieldId: new Uint8Array(32), setRoot: new Uint8Array(32) });
+    expect(getCredentialRequests).toHaveBeenCalledWith({
+      verifierPk: drawerValue.midnight.provider.address,
+      recipientPk: RECIPIENT,
+      eventId: EVENT_ID_HEX,
+    });
     expect(buildMerkleTree).toHaveBeenCalledWith([expect.any(Uint8Array), expect.any(Uint8Array)], 16);
 
     await waitFor(() =>
@@ -116,11 +122,11 @@ describe('PublishDisclosureRequest drawer view', () => {
 
   it('uses the returned requestId and publishes the accepted values for holders', async () => {
     const requestIdBytes = new Uint8Array(32).fill(0xee);
-    const publishDisclosureRequest = jest
+    const publishCredentialRequest = jest
       .fn()
       .mockResolvedValue({ public: { txHash: '0xabc' }, private: { result: requestIdBytes } });
     publishRequestRule.mockResolvedValue(undefined);
-    const drawerValue = buildDrawerValue({ publishDisclosureRequest });
+    const drawerValue = buildDrawerValue({ publishCredentialRequest });
     drawerValue.disclosureEvent = { eventId: EVENT_ID_HEX, fields: [{ ...FIELD, label: 'Sector' }] };
     renderWithProviders(<PublishDisclosureRequest />, { drawerValue });
 
@@ -132,16 +138,16 @@ describe('PublishDisclosureRequest drawer view', () => {
 
     expect(await screen.findByText(/Sector is one of: Campo, Platea/)).toBeInTheDocument();
     expect(publishRequestRule).toHaveBeenCalledWith('ee'.repeat(32), { op: 'oneOf', values: ['Campo', 'Platea'] });
-    expect(getDisclosureRequestsByVerifier).not.toHaveBeenCalled();
+    expect(getCredentialRequests).not.toHaveBeenCalled();
     expect(screen.queryByText(/requestId=/)).not.toBeInTheDocument();
   });
 
   it('asks a range question about a number field: the rule is published, the whole range goes in the tree', async () => {
     const requestIdBytes = new Uint8Array(32).fill(0xee);
-    const publishDisclosureRequest = jest
+    const publishCredentialRequest = jest
       .fn()
       .mockResolvedValue({ public: { txHash: '0xabc' }, private: { result: requestIdBytes } });
-    const drawerValue = buildDrawerValue({ publishDisclosureRequest });
+    const drawerValue = buildDrawerValue({ publishCredentialRequest });
     drawerValue.disclosureEvent = {
       eventId: EVENT_ID_HEX,
       fields: [{ ...FIELD, label: 'Age', type: 'number', min: 0, max: 120 }],
@@ -161,17 +167,17 @@ describe('PublishDisclosureRequest drawer view', () => {
   });
 
   it('rejects submission with no candidate values', async () => {
-    const publishDisclosureRequest = jest.fn();
-    const drawerValue = buildDrawerValue({ publishDisclosureRequest });
+    const publishCredentialRequest = jest.fn();
+    const drawerValue = buildDrawerValue({ publishCredentialRequest });
     renderWithProviders(<PublishDisclosureRequest />, { drawerValue });
 
     expect(screen.getByRole('button', { name: /^publish request$/i })).toBeDisabled();
-    expect(publishDisclosureRequest).not.toHaveBeenCalled();
+    expect(publishCredentialRequest).not.toHaveBeenCalled();
   });
 
   it("can't publish without the holder's key, and flags a key that isn't one", async () => {
-    const publishDisclosureRequest = jest.fn();
-    renderWithProviders(<PublishDisclosureRequest />, { drawerValue: buildDrawerValue({ publishDisclosureRequest }) });
+    const publishCredentialRequest = jest.fn();
+    renderWithProviders(<PublishDisclosureRequest />, { drawerValue: buildDrawerValue({ publishCredentialRequest }) });
 
     const memberInputs = screen.getAllByLabelText('Candidate value');
     await userEvent.type(memberInputs[0], 'EU');
@@ -180,12 +186,12 @@ describe('PublishDisclosureRequest drawer view', () => {
     await fillRecipient('not-a-key');
     expect(screen.getByText(/doesn't look like a holder's key/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^publish request$/i })).toBeDisabled();
-    expect(publishDisclosureRequest).not.toHaveBeenCalled();
+    expect(publishCredentialRequest).not.toHaveBeenCalled();
   });
 
   it('warns when the key holds no POAP of this event (still publishable)', async () => {
     getTokensByEvent.mockResolvedValue([{ tokenId: 1, ownerPk: 'e1'.repeat(32) }]);
-    renderWithProviders(<PublishDisclosureRequest />, { drawerValue: buildDrawerValue({ publishDisclosureRequest: jest.fn() }) });
+    renderWithProviders(<PublishDisclosureRequest />, { drawerValue: buildDrawerValue({ publishCredentialRequest: jest.fn() }) });
 
     await userEvent.type(screen.getAllByLabelText('Candidate value')[0], 'EU');
     await fillRecipient();
@@ -196,8 +202,8 @@ describe('PublishDisclosureRequest drawer view', () => {
   });
 
   it('asks about a "Valid until" date in plain words, anchored on today', async () => {
-    const publishDisclosureRequest = jest.fn().mockResolvedValue({ private: { result: new Uint8Array(32).fill(0xee) } });
-    const drawerValue = buildDrawerValue({ publishDisclosureRequest });
+    const publishCredentialRequest = jest.fn().mockResolvedValue({ private: { result: new Uint8Array(32).fill(0xee) } });
+    const drawerValue = buildDrawerValue({ publishCredentialRequest });
     drawerValue.disclosureEvent = {
       eventId: EVENT_ID_HEX,
       fields: [{ fieldId: FIELD.fieldId, label: 'Valid until', type: 'date', auto: 'validUntil' }],
@@ -224,13 +230,10 @@ describe('PublishDisclosureRequest drawer view', () => {
     const DNI = { fieldId: '0d'.repeat(32), label: 'DNI', type: 'identity', country: 'ARG', docType: 'national_id' };
     const SALT = 'ab'.repeat(32);
 
-    it('publishes the identity check and the question to the same holder, the code prefilled from the link', async () => {
+    it('asks the identity check and the question as one request, the code prefilled from the link', async () => {
       computeIdentityValue.mockReturnValue(new Uint8Array(32).fill(9));
-      const publishDisclosureRequest = jest
-        .fn()
-        .mockResolvedValueOnce({ private: { result: new Uint8Array(32).fill(0x01) } })
-        .mockResolvedValueOnce({ private: { result: new Uint8Array(32).fill(0x02) } });
-      const drawerValue = buildDrawerValue({ publishDisclosureRequest });
+      const publishCredentialRequest = jest.fn().mockResolvedValue({ private: { result: new Uint8Array(32).fill(0x01) } });
+      const drawerValue = buildDrawerValue({ publishCredentialRequest });
       drawerValue.disclosureEvent = {
         eventId: EVENT_ID_HEX,
         fields: [{ ...FIELD, label: 'Sector' }, DNI],
@@ -244,25 +247,27 @@ describe('PublishDisclosureRequest drawer view', () => {
       await userEvent.type(screen.getAllByLabelText('Candidate value')[0], 'Campo');
       await userEvent.click(screen.getByRole('button', { name: /^publish request$/i }));
 
-      await waitFor(() => expect(publishDisclosureRequest).toHaveBeenCalledTimes(2));
+      await waitFor(() => expect(publishCredentialRequest).toHaveBeenCalledTimes(1));
       const [country, docType, number, salt] = computeIdentityValue.mock.calls[0];
       const text = (b) => Buffer.from(b).toString('utf8').replace(/\0+$/, '');
       expect([text(country), text(docType), text(number)]).toEqual(['ARG', 'national_id', '12345678']);
       expect(Buffer.from(salt).toString('hex')).toBe(SALT);
       // The identity set holds that one value.
       expect(buildMerkleTree.mock.calls[0]).toEqual([[new Uint8Array(32).fill(9)], 16]);
-      const [first, second] = publishDisclosureRequest.mock.calls;
-      expect(first[2]).toEqual(Uint8Array.from(Buffer.from(DNI.fieldId, 'hex')));
-      expect(second[2]).toEqual(Uint8Array.from(Buffer.from(FIELD.fieldId, 'hex')));
-      expect(first[4]).toEqual(second[4]);
-      expect(publishRequestRule).toHaveBeenCalledWith('01'.repeat(32), { op: 'identity' });
-      expect(publishRequestRule).toHaveBeenCalledWith('02'.repeat(32), { op: 'oneOf', values: ['Campo'] });
+      const conditions = publishCredentialRequest.mock.calls[0][3];
+      // Identity in slot 0, the question in slot 1.
+      expect(conditions[0].fieldId).toEqual(Uint8Array.from(Buffer.from(DNI.fieldId, 'hex')));
+      expect(conditions[1].fieldId).toEqual(Uint8Array.from(Buffer.from(FIELD.fieldId, 'hex')));
+      expect(conditions[2].fieldId).toEqual(new Uint8Array(32));
+      // Only the question's rule is published; the identity check needs none.
+      await waitFor(() => expect(publishRequestRule).toHaveBeenCalledWith('01'.repeat(32), { op: 'oneOf', values: ['Campo'] }));
+      expect(publishRequestRule).toHaveBeenCalledTimes(1);
       expect(await screen.findByText(/DNI matches the document checked/)).toBeInTheDocument();
     });
 
     it('asks for an explicit confirmation to go without the identity check', async () => {
-      const publishDisclosureRequest = jest.fn().mockResolvedValue({ private: { result: new Uint8Array(32).fill(0x02) } });
-      const drawerValue = buildDrawerValue({ publishDisclosureRequest });
+      const publishCredentialRequest = jest.fn().mockResolvedValue({ private: { result: new Uint8Array(32).fill(0x02) } });
+      const drawerValue = buildDrawerValue({ publishCredentialRequest });
       drawerValue.disclosureEvent = { eventId: EVENT_ID_HEX, fields: [FIELD, DNI], recipient: RECIPIENT };
       renderWithProviders(<PublishDisclosureRequest />, { drawerValue });
 
@@ -275,13 +280,13 @@ describe('PublishDisclosureRequest drawer view', () => {
       await userEvent.click(screen.getByLabelText(/i understand, ask without it/i));
       expect(publish).toBeEnabled();
       await userEvent.click(publish);
-      await waitFor(() => expect(publishDisclosureRequest).toHaveBeenCalledTimes(1));
-      expect(publishDisclosureRequest.mock.calls[0][2]).toEqual(Uint8Array.from(Buffer.from(FIELD.fieldId, 'hex')));
+      await waitFor(() => expect(publishCredentialRequest).toHaveBeenCalledTimes(1));
+      expect(publishCredentialRequest.mock.calls[0][3][0].fieldId).toEqual(Uint8Array.from(Buffer.from(FIELD.fieldId, 'hex')));
     });
 
     it('needs the number and a valid code before publishing', async () => {
-      const publishDisclosureRequest = jest.fn();
-      const drawerValue = buildDrawerValue({ publishDisclosureRequest });
+      const publishCredentialRequest = jest.fn();
+      const drawerValue = buildDrawerValue({ publishCredentialRequest });
       drawerValue.disclosureEvent = { eventId: EVENT_ID_HEX, fields: [DNI], recipient: RECIPIENT };
       renderWithProviders(<PublishDisclosureRequest />, { drawerValue });
 
@@ -297,7 +302,7 @@ describe('PublishDisclosureRequest drawer view', () => {
   it('dispatches CLOSE_DRAWER when the close button is clicked', async () => {
     const dispatch = jest.fn();
     renderWithProviders(<PublishDisclosureRequest />, {
-      drawerValue: buildDrawerValue({ publishDisclosureRequest: jest.fn() }),
+      drawerValue: buildDrawerValue({ publishCredentialRequest: jest.fn() }),
       drawerDispatch: dispatch,
     });
 

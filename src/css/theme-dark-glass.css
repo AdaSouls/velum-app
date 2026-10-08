@@ -1233,6 +1233,20 @@ select option,
 /* Small info-icon callout — used for the "share this with a subscriber" hint under the Organizer
    blockchain field, and any other short contextual note that deserves more visual weight than a
    plain muted <small>. */
+/* createEvent's Private Fields step (PrivateAttributesStepFields.jsx): each field is its own block,
+   split from the next by a thin line with room on both sides. */
+.private-field-row {
+  padding: 14px 0;
+}
+
+.private-field-row:first-child {
+  padding-top: 0;
+}
+
+.private-field-row + .private-field-row {
+  border-top: 1px solid var(--glass-border);
+}
+
 .info-hint-card {
   display: flex;
   align-items: center;

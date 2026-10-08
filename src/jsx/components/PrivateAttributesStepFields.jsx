@@ -86,7 +86,7 @@ export default function PrivateAttributesStepFields({ values, onChange }) {
         const type = attribute.type || "text";
         const error = privateFieldRowError({ ...attribute, type });
         return (
-          <div className="mb-3" key={index}>
+          <div className="private-field-row" key={index}>
             <div className="d-flex align-items-center mb-2" style={{ gap: "8px" }}>
               <input
                 type="text"

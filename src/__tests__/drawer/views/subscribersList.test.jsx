@@ -4,7 +4,6 @@ import userEvent from '@testing-library/user-event';
 import SubscribersList from '../../../jsx/drawer/views/subscribersList';
 import { mockDrawerContext, mockUserRoles, renderWithProviders } from '../../../testUtils';
 import { getCredentialUpdateRequests } from '../../../midnight/indexer.service';
-import { saveReissueRecord } from '../../../midnight/reissue-store';
 
 jest.mock('../../../midnight/indexer.service', () => ({ getCredentialUpdateRequests: jest.fn() }));
 
@@ -45,17 +44,15 @@ describe('SubscribersList drawer view', () => {
     });
   });
 
-  it('offers to finish a re-issue left half done', async () => {
-    const record = { stage: 'burned', tokenId: 2, eventId: EVENT.eventId, values: {} };
-    saveReissueRecord(record);
-    const dispatch = jest.fn();
-    renderWithProviders(<SubscribersList />, { drawerValue: drawerValueFor(ORGANIZER), drawerDispatch: dispatch });
-
-    await userEvent.click(screen.getByRole('button', { name: /finish re-issuing poap #2/i }));
-    expect(dispatch).toHaveBeenCalledWith({
-      type: 'SHOW_REVIEW_UPDATE',
-      payload: expect.objectContaining({ token: TOKENS[1], resume: record }),
-    });
+  it('marks a token replaced by a re-issue as Re-issued, not Burned', () => {
+    const drawerValue = drawerValueFor(null);
+    drawerValue.subscribers = {
+      ...drawerValue.subscribers,
+      tokens: [...TOKENS, { tokenId: 3, ownerPk: '22'.repeat(32), isBurned: false, mintedBlock: 12, replacesTokenId: 2 }],
+    };
+    renderWithProviders(<SubscribersList />, { drawerValue });
+    expect(screen.getByText('Re-issued')).toBeInTheDocument();
+    expect(screen.queryByText('Burned')).not.toBeInTheDocument();
   });
 
   it('lists each token with its status', () => {

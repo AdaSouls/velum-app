@@ -11,8 +11,7 @@ import {
 } from "../../toasts/sweetAlerts";
 import { encodeAttributeValue } from "../../../midnight/attribute-value-codec";
 import { buildMerkleTree } from "../../../midnight/merkle";
-import { getDisclosureRequestsByVerifier, getTokensByEvent } from "../../../midnight/indexer.service";
-import { requestRecipient } from "../../../midnight/ownership-proof";
+import { getCredentialRequests, getTokensByEvent } from "../../../midnight/indexer.service";
 import { parseHolderCode } from "../../../midnight/credential-crypto";
 import { holderCodeFromInput } from "../../../midnight/invite-links";
 import { publishRequestRule } from "../../../midnight/disclosure-sets";
@@ -25,51 +24,49 @@ import { computeIdentityValue } from "../../../midnight/contract.service";
 
 const REQUEST_ID_POLL_ATTEMPTS = 10;
 const REQUEST_ID_POLL_DELAY_MS = 1500;
+// poap.compact's CredentialRequest holds Vector<4, CredentialCondition>; unused slots are all-zero.
+const CONDITION_SLOTS = 4;
 
-// After publishDisclosureRequest's tx confirms, the requestId it produced isn't something we can
-// recompute ourselves (poap.compact's disclosure_request_key is NOT an exported pure circuit, unlike
-// computeEventId) or trust out of the tx result (this codebase's established convention — see
-// contract.service.ts's own comment near computeEventId). So: poll the indexer for OUR OWN just-
-// published request, matching on the (eventId, fieldId, setRoot) we already know client-side.
-async function pollForRequestId({ verifierPkHex, eventIdHex, fieldIdHex, setRootHex, recipientPkHex }) {
-  for (let attempt = 0; attempt < REQUEST_ID_POLL_ATTEMPTS; attempt++) {
-    const requests = await getDisclosureRequestsByVerifier(verifierPkHex);
-    const match = requests.find(
-      (request) =>
-        request.eventId === eventIdHex &&
-        request.fieldId === fieldIdHex &&
-        request.setRoot === setRootHex &&
-        requestRecipient(request) === recipientPkHex,
+// The circuit returns the requestId (private.result); if it doesn't come back, poll the indexer for
+// OUR OWN just-published request, matching on what we already know client-side (event, holder and
+// the conditions' roots).
+async function pollForRequestId({ verifierPkHex, eventIdHex, recipientPkHex, conditions }) {
+  const sameConditions = (request) =>
+    request.conditions.length === conditions.length &&
+    conditions.every(
+      (c, slot) =>
+        request.conditions.some((rc) => rc.slot === slot && rc.fieldId === c.fieldIdHex && rc.setRoot === c.setRootHex),
     );
+  for (let attempt = 0; attempt < REQUEST_ID_POLL_ATTEMPTS; attempt++) {
+    const requests = await getCredentialRequests({ verifierPk: verifierPkHex, recipientPk: recipientPkHex, eventId: eventIdHex });
+    const match = [...requests].reverse().find(sameConditions);
     if (match) return match.requestId;
     await new Promise((resolve) => setTimeout(resolve, REQUEST_ID_POLL_DELAY_MS));
   }
   return null;
 }
 
-// Any connected wallet can publish a disclosure request (poap.compact's publishDisclosureRequest has
-// no organizer/admin gate) — this popup is opened from eventCard.jsx's "Ask for a Disclosure" button
-// (the organizer, from My Events) or from a holder's request link (/app/request, anyone else), on any
-// Credential event with private fields (its metadataURI's credentialAttributeFields, see
-// createEvent.jsx). The question depends on the field's type (QuestionBuilder.jsx): a list of
-// accepted values, or a number/date range. Holders answer from their POAP card (holderProofs.jsx),
-// so the question's rule is published for them (publishRequestRule); the chain only keeps the root
-// of the set it expands to.
+// Any connected wallet can ask (poap.compact's publishCredentialRequest has no organizer/admin gate)
+// — this popup is opened from eventCard.jsx's "Ask for a Disclosure" button (the organizer, from My
+// Events) or from a holder's request link (/app/request, anyone else), on any Credential event with
+// private fields (its metadataURI's credentialAttributeFields, see createEvent.jsx). The question
+// depends on the field's type (QuestionBuilder.jsx): a list of accepted values, or a number/date
+// range. Holders answer from their POAP card (holderProofs.jsx), so the question's rule is published
+// for them (publishRequestRule, under the request id); the chain only keeps the root of the set it
+// expands to.
 //
-// Every request is addressed to ONE holder (publishDisclosureRequest's `recipient`): their key for
-// this event's organizer, which they copy from Prove a Private Detail on their POAP. The contract
-// rejects proveCredentialAttribute on an open request and lets only the recipient answer, so a
-// classmate can't answer in the applicant's place (AdaSouls/velum f6f6114).
+// Every request is addressed to ONE holder (`recipient`): their key for this event's organizer, which
+// they copy from Prove a Private Detail on their POAP. Only that holder can answer it.
 //
-// Identity check (AdaSouls/velum 0e37df6, flow 12): addressing alone doesn't stop the applicant from
-// handing over a qualifying friend's key. When the credential carries an identity document, the
-// asker types the number on the document they checked plus the holder's identity code (prefilled
-// from the request link), and a second request asks "is it this document?" — a set of one value,
-// computeIdentityValue(...). Both requests go to the same holder; a holder has one credential per
-// event, so both proofs are about the same credential. Two signatures, published in a row.
+// Identity check (flow 12): addressing alone doesn't stop the applicant from handing over a
+// qualifying friend's key. When the credential carries an identity document, the asker types the
+// number on the document they checked plus the holder's identity code (prefilled from the request
+// link), and the request also asks "is it this document?" — a set of one value,
+// computeIdentityValue(...). Identity check and question are conditions of ONE credential request
+// (publishCredentialRequest, AdaSouls/velum 77e4ed8), answered in one proof from one credential:
+// the question can't be answered without the identity. One signature.
 // The check is on by default and turning it off takes an explicit confirmation: without it, a
-// borrowed key answers the question just as well (verifyProof.jsx flags a question proof whose
-// identity check is missing).
+// borrowed key answers the question just as well.
 export default function PublishDisclosureRequest() {
   const { midnight, disclosureEvent } = useDrawer();
   const dispatch = useDrawerDispatch();
@@ -139,21 +136,28 @@ export default function PublishDisclosureRequest() {
     dispatch({ type: "CLOSE_DRAWER" });
   };
 
-  // One publishDisclosureRequest transaction + its question for holders. Returns the request id.
-  const publishOne = async ({ title, fieldIdHex, setRootBytes, rule: question }) => {
-    const setRootHex = Buffer.from(setRootBytes).toString("hex");
+  // One publishCredentialRequest transaction for every condition (slot order = conditions order),
+  // then each question's rule for holders. Returns the request id.
+  const publishRequest = async (conditions) => {
+    const title = "Publishing Disclosure Request";
     const label = new Uint8Array(32);
     crypto.getRandomValues(label);
+    const onChain = Array.from({ length: CONDITION_SLOTS }, (_, slot) =>
+      conditions[slot]
+        ? {
+            fieldId: Uint8Array.from(Buffer.from(conditions[slot].fieldIdHex, "hex")),
+            setRoot: conditions[slot].setRootBytes,
+          }
+        : { fieldId: new Uint8Array(32), setRoot: new Uint8Array(32) },
+    );
     loadingFunction(title, "Preparing transaction…", "");
-    const publishedTx = await midnight.provider.service.publishDisclosureRequest(
+    const publishedTx = await midnight.provider.service.publishCredentialRequest(
       label,
       Uint8Array.from(Buffer.from(disclosureEvent.eventId, "hex")),
-      Uint8Array.from(Buffer.from(fieldIdHex, "hex")),
-      setRootBytes,
       Uint8Array.from(Buffer.from(recipientPkHex, "hex")),
+      onChain,
     );
 
-    // The circuit returns the requestId (private.result); the indexer poll stays as a fallback.
     const returned = publishedTx?.private?.result;
     let requestId = returned instanceof Uint8Array && returned.length === 32 ? Buffer.from(returned).toString("hex") : null;
     if (!requestId) {
@@ -161,20 +165,21 @@ export default function PublishDisclosureRequest() {
       requestId = await pollForRequestId({
         verifierPkHex: midnight.provider.address,
         eventIdHex: disclosureEvent.eventId,
-        fieldIdHex,
-        setRootHex,
         recipientPkHex,
+        conditions: conditions.map((c) => ({ fieldIdHex: c.fieldIdHex, setRootHex: Buffer.from(c.setRootBytes).toString("hex") })),
       });
     }
     if (!requestId) {
       throw new Error("Published, but the indexer hasn't shown it yet. Publish the request again shortly.");
     }
 
-    // Holders answer from their card, so they need the question — the chain only has the root. For
-    // an identity check that's just { op: 'identity' }: the value stays between asker and holder.
-    loadingFunction(title, "Publishing the question…", "");
+    // Holders answer from their card, so they need each question — the chain only has the roots.
+    // All under the request id: the holder matches each rule to its condition by root. An identity
+    // check needs none: the holder rebuilds its one value from their own document.
+    const questions = conditions.filter((c) => c.rule.op !== "identity");
+    if (questions.length) loadingFunction(title, "Publishing the question…", "");
     try {
-      await publishRequestRule(requestId, question);
+      for (const question of questions) await publishRequestRule(requestId, question.rule);
     } catch (setError) {
       console.error("Publishing the accepted values failed:", setError);
       throw new Error(
@@ -209,47 +214,36 @@ export default function PublishDisclosureRequest() {
       return;
     }
 
-    const total = (checkIdentity ? 1 : 0) + (askQuestion ? 1 : 0);
-    const titleFor = (n) => `Publishing Disclosure Request${total > 1 ? ` (${n} of ${total})` : ""}`;
-    const done = [];
     setLoading(true);
     setPublished(null);
     try {
+      // Identity first (slot 0), then the question.
+      const conditions = [];
+      const asked = [];
       if (checkIdentity) {
         const value = computeIdentityValue(...identityInputs(identityField, numberCheck.value, idCode.trim().toLowerCase()));
         const tree = await buildMerkleTree([value], 16);
-        await publishOne({
-          title: titleFor(1),
-          fieldIdHex: identityField.fieldId,
-          setRootBytes: tree.rootBytes,
-          rule: { op: "identity" },
-        });
-        done.push(describeRule(identityField.label, { op: "identity" }));
+        conditions.push({ fieldIdHex: identityField.fieldId, setRootBytes: tree.rootBytes, rule: { op: "identity" } });
+        asked.push(describeRule(identityField.label, { op: "identity" }));
       }
       if (askQuestion) {
-        const title = titleFor(done.length + 1);
         if (ruleSize(rule) > 2000) {
-          loadingFunction(title, `Building the ${ruleSize(rule).toLocaleString()} accepted values…`, "");
+          loadingFunction("Publishing Disclosure Request", `Building the ${ruleSize(rule).toLocaleString()} accepted values…`, "");
         }
         const tree = await buildMerkleTree(expandRule(rule).map(encodeAttributeValue), 16);
-        await publishOne({ title, fieldIdHex: fieldId, setRootBytes: tree.rootBytes, rule });
-        done.push(describeRule(selectedField?.label || "Value", rule));
+        conditions.push({ fieldIdHex: fieldId, setRootBytes: tree.rootBytes, rule });
+        asked.push(describeRule(selectedField?.label || "Value", rule));
       }
-      setPublished(done);
+      await publishRequest(conditions);
+      setPublished(asked);
       succesfullBlockchainCreation(
-        done.length > 1 ? "Disclosure Requests Published" : "Disclosure Request Published",
+        "Disclosure Request Published",
         "The holder can now answer from their POAP (Prove a Private Detail).",
         "",
       );
     } catch (error) {
       console.error("Error publishing disclosure request:", error);
-      const message = friendlyErrorMessage(error, "Failed to publish the disclosure request. Please try again.");
-      errorFunction(
-        "Error",
-        done.length ? `“${done[0]}” was published; the next request failed. ${message}` : message,
-        "",
-      );
-      if (done.length) setPublished(done);
+      errorFunction("Error", friendlyErrorMessage(error, "Failed to publish the disclosure request. Please try again."), "");
     } finally {
       setLoading(false);
     }
@@ -436,8 +430,8 @@ export default function PublishDisclosureRequest() {
             {checkIdentity && askQuestion && (
               <div className="col-12">
                 <small className="form-text text-muted d-block">
-                  Two requests, one signature each. The holder answers both together and sends you
-                  one link that checks both. A proof of the question alone isn't enough.
+                  One request, one signature. The holder answers the identity check and the question
+                  in a single proof: neither can be answered without the other.
                 </small>
               </div>
             )}
@@ -447,8 +441,7 @@ export default function PublishDisclosureRequest() {
                 <div className="alert alert-success m-0" role="status">
                   Published: {published.map((text) => `“${text}”`).join(" and ")}. If it fits, the holder
                   can prove it from their POAP card (Prove a Private Detail), without revealing it.
-                  {published.length > 1 &&
-                    " They'll send you one link that checks both proofs: the answer alone doesn't show the credential is theirs."}
+                  {published.length > 1 && " Both are answered in one proof."}
                 </div>
               </div>
             )}

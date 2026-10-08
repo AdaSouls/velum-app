@@ -9,7 +9,6 @@ import {
   credentialPathOnChain,
   deliverCredentialPackage,
 } from '../../../midnight/credential-delivery';
-import { getReissueRecord, saveReissueRecord } from '../../../midnight/reissue-store';
 
 jest.mock('../../../midnight/credential-update', () => {
   const actual = jest.requireActual('../../../midnight/credential-update');
@@ -74,20 +73,20 @@ const serviceMock = () => ({
   getInboxKeyPair: jest.fn().mockResolvedValue({ publicKeyHex: 'ef'.repeat(32) }),
   getState: jest.fn().mockResolvedValue({ ledger: { credentials: {} } }),
   dismissCredentialUpdate: jest.fn().mockResolvedValue({ public: { txHash: '0xd' } }),
-  burn: jest.fn().mockResolvedValue({ public: { txHash: '0xb' } }),
-  mintTo: jest.fn().mockResolvedValue({ public: { txHash: '0xm' } }),
+  reissueCredential: jest.fn().mockResolvedValue({ public: { txHash: '0xr' } }),
 });
 
 // A ledger whose event is expired, for the "can't re-issue" checks (mint-readiness.ts).
-const expiredLedger = () => ({
+const ledgerWith = (event) => ({
   credentials: {},
   isPaused: false,
   events: {
     member: () => true,
-    lookup: () => ({ maxSupply: 0n, minted: 3n, expiration: 1000n, organizer: new Uint8Array(32), isActive: true }),
+    lookup: () => ({ maxSupply: 0n, minted: 3n, expiration: 0n, organizer: new Uint8Array(32), isActive: true, ...event }),
   },
   issuers: { member: () => false },
 });
+const expiredLedger = () => ledgerWith({ expiration: 1000n });
 
 const render = (service, ctx = CTX, dispatch = jest.fn()) =>
   renderWithProviders(<ReviewCredentialUpdate />, {
@@ -122,7 +121,7 @@ describe('ReviewCredentialUpdate wizard', () => {
     credentialPathOnChain.mockResolvedValue(null);
     render(serviceMock());
     expect(await screen.findByText(/don't match this credential on-chain/i)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /re-issue/i })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /^re-issue$/i })).toBeDisabled();
   });
 
   it('dismisses the request', async () => {
@@ -135,79 +134,55 @@ describe('ReviewCredentialUpdate wizard', () => {
     expect(dispatch).toHaveBeenCalledWith({ type: 'CLOSE_DRAWER' });
   });
 
-  it('re-issues in steps: revoke (saving a record first), then mint the updated credential to the same holder', async () => {
+  it('re-issues in one transaction with the updated values and the same images, then delivers them', async () => {
     const service = serviceMock();
-    render(service);
+    const dispatch = jest.fn();
+    render(service, CTX, dispatch);
     await screen.findByText(/match this credential on-chain/i);
-    await userEvent.click(screen.getByRole('button', { name: /re-issue/i }));
-    await userEvent.click(screen.getByRole('button', { name: /revoke and continue/i }));
+    await userEvent.click(screen.getByRole('button', { name: /^re-issue$/i }));
+    expect(screen.getByText('40111222')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: /re-issue credential/i }));
 
-    await waitFor(() => expect(service.burn).toHaveBeenCalledWith(5n));
-    expect(getReissueRecord(EVENT.eventId, 5)).toMatchObject({
-      stage: 'burned',
-      holderPk: HOLDER,
-      tokenMetadataURI: 'ipfs://token-meta',
-      values: { [GRADE]: '9', [DNI]: '40111222' },
-    });
-
-    await userEvent.click(await screen.findByRole('button', { name: /issue updated credential/i }));
-    await waitFor(() => expect(service.mintTo).toHaveBeenCalled());
+    await waitFor(() => expect(service.reissueCredential).toHaveBeenCalled());
     expect(buildCredentialAttributes).toHaveBeenCalledWith(TEMPLATE, { [GRADE]: '9', [DNI]: '40111222' });
-    const [eventId, holder, uri, commit, root] = service.mintTo.mock.calls[0];
-    expect(Buffer.from(eventId).toString('hex')).toBe(EVENT.eventId);
-    expect(Buffer.from(holder).toString('hex')).toBe(HOLDER);
+    const [tokenId, uri, commit, root] = service.reissueCredential.mock.calls[0];
+    expect(tokenId).toBe(5n);
     expect(uri).toBe('ipfs://token-meta');
     expect(commit).toEqual(new Uint8Array(32));
     expect(root).toEqual(new Uint8Array(32).fill(3));
     await waitFor(() =>
       expect(deliverCredentialPackage).toHaveBeenCalledWith(expect.objectContaining({ holderPk: HOLDER }), 'ee'.repeat(32)),
     );
-    expect(getReissueRecord(EVENT.eventId, 5)).toBeNull();
+    expect(dispatch).toHaveBeenCalledWith({ type: 'CLOSE_DRAWER' });
   });
 
-  it('resumes at the last step from a saved record', async () => {
-    const record = {
-      stage: 'burned',
-      tokenId: 5,
-      eventId: EVENT.eventId,
-      issuerPk: EVENT.issuerPk,
-      holderPk: HOLDER,
-      holderEncryptionKey: 'ee'.repeat(32),
-      tokenMetadataURI: 'ipfs://token-meta',
-      values: { [DNI]: '40111222' },
-      payloadCommit: '99'.repeat(32),
-      savedAt: '2026-10-07T00:00:00.000Z',
-    };
-    saveReissueRecord(record);
+  it("doesn't block a re-issue on a full supply: it doesn't use a place", async () => {
     const service = serviceMock();
-    render(service, { ...CTX, request: undefined, token: { ...TOKEN, isBurned: true }, resume: record });
-
-    expect(screen.getByRole('heading', { name: /finish re-issue/i })).toBeInTheDocument();
-    expect(fetchUpdateRequest).not.toHaveBeenCalled();
-    await userEvent.click(screen.getByRole('button', { name: /issue updated credential/i }));
-    await waitFor(() => expect(service.mintTo).toHaveBeenCalled());
-    await waitFor(() => expect(getReissueRecord(EVENT.eventId, 5)).toBeNull());
+    service.getState.mockResolvedValue({ ledger: ledgerWith({ maxSupply: 3n, minted: 3n }) });
+    render(service);
+    await screen.findByText(/match this credential on-chain/i);
+    expect(screen.queryByText(/whole supply/i)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^re-issue$/i })).toBeEnabled();
   });
 
-  it("won't revoke when the event can no longer take a new credential", async () => {
+  it("won't re-issue when the event can no longer take it", async () => {
     const service = serviceMock();
     service.getState.mockResolvedValue({ ledger: expiredLedger() });
     render(service);
     expect(await screen.findByText(/this event has expired/i)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /re-issue/i })).toBeDisabled();
-    expect(service.burn).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: /^re-issue$/i })).toBeDisabled();
+    expect(service.reissueCredential).not.toHaveBeenCalled();
   });
 
-  it('checks again right before revoking and stops if the event expired meanwhile', async () => {
+  it('checks again right before re-issuing and stops if the event expired meanwhile', async () => {
     const service = serviceMock();
     render(service);
     await screen.findByText(/match this credential on-chain/i);
-    await userEvent.click(screen.getByRole('button', { name: /re-issue/i }));
+    await userEvent.click(screen.getByRole('button', { name: /^re-issue$/i }));
     service.getState.mockResolvedValue({ ledger: expiredLedger() });
-    await userEvent.click(screen.getByRole('button', { name: /revoke and continue/i }));
+    await userEvent.click(screen.getByRole('button', { name: /re-issue credential/i }));
 
     expect(await screen.findByText(/this event has expired/i)).toBeInTheDocument();
-    expect(service.burn).not.toHaveBeenCalled();
-    expect(getReissueRecord(EVENT.eventId, 5)).toBeNull();
+    expect(service.reissueCredential).not.toHaveBeenCalled();
   });
 });

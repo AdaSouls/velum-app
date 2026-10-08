@@ -39,7 +39,7 @@ across organizers, and holders can prove things about a credential without showi
   "≥", "between", "at least N years ago").
 - Tie a credential to the holder's identity document, so a verifier who checks the document can
   tell the credential is theirs (no answering with a friend's).
-- Review holders' update requests (e.g. a new document number) and re-issue in guided steps.
+- Review holders' update requests (e.g. a new document number) and re-issue in one transaction.
 
 **Holders:**
 - Explore and claim events, and see all their credentials in one place.

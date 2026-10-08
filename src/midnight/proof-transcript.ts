@@ -4,7 +4,10 @@
 // so the transcript carries, in order:
 //   push <requestId> · member · … · idx [<requestId>] · popeq <request record>
 // where the record is { verifier, eventId, fieldId, setRoot, recipient } (recipient added with
-// addressed requests, AdaSouls/velum f6f6114; a 4-field record is the earlier layout). proveTokenOwnership then checks
+// addressed requests, AdaSouls/velum f6f6114; a 4-field record is the earlier layout). A credential
+// request (proveCredentialAttributes, AdaSouls/velum 77e4ed8) is looked up the same way in its own
+// map; its record is { verifier, eventId, recipient, conditions: 4 × { fieldId, setRoot } } — 11
+// atoms, unused slots all-zero. proveTokenOwnership then checks
 // `tokenOwner.member(tokenId)`, a push of the 8-byte token id, the first one after the request.
 // These are values the circuit discloses on purpose (poap.compact's disclose()), nothing private.
 //
@@ -19,12 +22,16 @@ export type ProofDetails = {
   setRoot: string; // hex, all-zero for a plain request
   recipientPk: string | null; // hex — the holder it was addressed to (and so who answered); null = open
   tokenId: bigint | null; // only proveTokenOwnership reveals it
+  // Credential requests only: the used conditions, in slot order (fieldId/setRoot above = slot 0).
+  conditions: { slot: number; fieldId: string; setRoot: string }[] | null;
 };
 
 type Atom = Uint8Array;
 type AlignedValue = { value: Atom[]; alignment: { tag: string; value?: { tag: string; length?: number } }[] };
 
 const ZERO_32 = '0'.repeat(64);
+// verifier, eventId, recipient + 4 × (fieldId, setRoot).
+const CREDENTIAL_REQUEST_ATOMS = 11;
 
 function toHex32(bytes: Atom | undefined): string {
   const hex = Buffer.from(bytes ?? new Uint8Array()).toString('hex');
@@ -77,8 +84,27 @@ export function readProofDetails(program: any[]): ProofDetails | null {
     }
   }
   const fieldCount = record?.value?.length;
-  if (!record || (fieldCount !== 4 && fieldCount !== 5)) return null;
-  const [verifier, eventId, fieldId, setRoot, recipient] = record.value;
+  if (!record || (fieldCount !== 4 && fieldCount !== 5 && fieldCount !== CREDENTIAL_REQUEST_ATOMS)) return null;
+  let verifier: Atom;
+  let eventId: Atom;
+  let fieldId: Atom;
+  let setRoot: Atom;
+  let recipient: Atom | undefined;
+  let conditions: ProofDetails['conditions'] = null;
+  if (fieldCount === CREDENTIAL_REQUEST_ATOMS) {
+    [verifier, eventId, recipient] = record.value;
+    conditions = [];
+    for (let slot = 0; slot < 4; slot++) {
+      const conditionFieldId = toHex32(record.value[3 + slot * 2]);
+      if (conditionFieldId === ZERO_32) continue;
+      conditions.push({ slot, fieldId: conditionFieldId, setRoot: toHex32(record.value[4 + slot * 2]) });
+    }
+    if (!conditions.length) return null;
+    fieldId = record.value[3];
+    setRoot = record.value[4];
+  } else {
+    [verifier, eventId, fieldId, setRoot, recipient] = record.value;
+  }
   const recipientHex = recipient === undefined ? ZERO_32 : toHex32(recipient);
 
   // 3. The token id (ownership proofs only): the first 8-byte push after the record, tested with member.
@@ -99,6 +125,7 @@ export function readProofDetails(program: any[]): ProofDetails | null {
     setRoot: toHex32(setRoot),
     recipientPk: recipientHex === ZERO_32 ? null : recipientHex,
     tokenId,
+    conditions,
   };
 }
 

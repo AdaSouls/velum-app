@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { X, Info, Check, Copy, CircleAlert, ShieldCheck, Flame, RefreshCw } from "lucide-react";
+import { X, Info, Check, Copy, CircleAlert, ShieldCheck, RefreshCw } from "lucide-react";
 import { useDrawer, useDrawerDispatch } from "../../contexts/drawer/drawer.provider";
 import { errorFunction, loadingFunction, succesfullBlockchainCreation } from "../../toasts/sweetAlerts";
 import { fetchUpdateRequest, reissueValues } from "../../../midnight/credential-update";
@@ -9,7 +9,6 @@ import {
   deliverCredentialPackage,
   packageToLinkFragment,
 } from "../../../midnight/credential-delivery";
-import { getReissueRecord, removeReissueRecord, saveReissueRecord } from "../../../midnight/reissue-store";
 import { notifyTokenBurned } from "../../../midnight/token-events";
 import { documentLabel } from "../../../midnight/identity";
 import { txHashOf } from "../../../midnight/tx-result";
@@ -18,37 +17,33 @@ import { MINT_BLOCKER_MESSAGES, mintBlockers } from "../../../midnight/mint-read
 import loadingGif from "../../../images/loading.gif";
 
 const truncateHex = (hex) => (hex ? `${hex.slice(0, 10)}…${hex.slice(-8)}` : "N/A");
-const fromHex = (value) => Uint8Array.from(Buffer.from(value, "hex"));
 
 const STEP_REVIEW = "review";
-const STEP_REVOKE = "revoke";
-const STEP_ISSUE = "issue";
-const STEPS = [STEP_REVIEW, STEP_REVOKE, STEP_ISSUE];
+const STEP_REISSUE = "reissue";
+const STEPS = [STEP_REVIEW, STEP_REISSUE];
 
 // The organizer's side of a credential update request (credential-update.ts), opened from the
-// subscribers list (SHOW_REVIEW_UPDATE). Three guided steps, one signature each where there is one:
+// subscribers list (SHOW_REVIEW_UPDATE). Two steps:
 //   1. Review — open the holder's sealed request with this identity's inbox key, check that the
 //      credential it describes is the one on-chain, compare old and new document. Dismiss
 //      (dismissCredentialUpdate) or go on.
-//   2. Revoke — burn(tokenId), which also closes the request on-chain.
-//   3. Issue — mintTo the same holder pseudonym with the updated values (fresh openings, a new
-//      identity code), reusing the old token's metadata (same images), and deliver the private
-//      details encrypted to the holder's key from the request.
-// Between 2 and 3 the holder has no credential, so a record (reissue-store.ts) is saved before the
-// burn; reopening from the subscribers list ("Finish re-issue") resumes at step 3.
-// Before any of that, the event must still accept a new mint (mint-readiness.ts: active, not
-// expired, supply left, organizer not blocked, contract not paused) — checked on open and again
-// right before the burn, so a re-issue that can't finish never revokes the old credential.
+//   2. Re-issue — reissueCredential, one transaction (AdaSouls/velum 77e4ed8): burns the old token
+//      and mints its replacement to the same holder pseudonym with the updated values (fresh
+//      openings, a new identity code) and the old token's metadata (same images); it also closes
+//      the request. If it fails, the old credential stays as it was. Then the private details are
+//      delivered encrypted to the holder's key from the request.
+// The event must still accept it (mint-readiness.ts: active, not expired, organizer not blocked,
+// contract not paused; a re-issue doesn't use up supply), checked on open and right before signing,
+// so the organizer sees why instead of a failed transaction.
 export default function ReviewCredentialUpdate() {
   const { midnight, reviewUpdateContext: ctx } = useDrawer();
   const dispatch = useDrawerDispatch();
   const service = midnight?.provider?.service;
 
-  const [step, setStep] = useState(ctx?.resume ? STEP_ISSUE : STEP_REVIEW);
+  const [step, setStep] = useState(STEP_REVIEW);
   const [payload, setPayload] = useState(null);
-  const [status, setStatus] = useState(ctx?.resume ? "ready" : "loading"); // loading | ready | unreadable | error
+  const [status, setStatus] = useState("loading"); // loading | ready | unreadable | error
   const [matchesChain, setMatchesChain] = useState(null);
-  const [record, setRecord] = useState(ctx?.resume || null);
   const [busy, setBusy] = useState(false);
   const [deliveryLink, setDeliveryLink] = useState(null);
   const [linkCopied, setLinkCopied] = useState(false);
@@ -58,7 +53,7 @@ export default function ReviewCredentialUpdate() {
   const fieldLabel = (fieldId) => template.find((field) => field.fieldId === fieldId)?.label || "Field";
 
   useEffect(() => {
-    if (!ctx || ctx.resume || !service) return undefined;
+    if (!ctx || !service) return undefined;
     let cancelled = false;
     (async () => {
       const inbox = await service.getInboxKeyPair();
@@ -89,14 +84,14 @@ export default function ReviewCredentialUpdate() {
     };
   }, [ctx, service]);
 
-  const eventIdHex = ctx?.resume?.eventId || ctx?.event?.eventId;
+  const eventIdHex = ctx?.event?.eventId;
   useEffect(() => {
     if (!eventIdHex || !service) return undefined;
     let cancelled = false;
     service
       .getState()
       .then(({ ledger }) => {
-        if (!cancelled) setBlockers(mintBlockers(ledger, eventIdHex));
+        if (!cancelled) setBlockers(mintBlockers(ledger, eventIdHex, Date.now(), { reissue: true }));
       })
       .catch((error) => console.warn("Could not check whether the event still accepts a re-issue:", error));
     return () => {
@@ -121,67 +116,35 @@ export default function ReviewCredentialUpdate() {
     }
   };
 
-  const handleRevoke = async () => {
-    const next = {
-      stage: "burning",
-      tokenId: Number(ctx.token.tokenId),
-      eventId: ctx.event.eventId,
-      issuerPk: ctx.event.issuerPk,
-      holderPk: payload.holderPk,
-      holderEncryptionKey: payload.holderEncryptionKey,
-      tokenMetadataURI: ctx.token.tokenMetadataURI || "",
-      values: reissueValues(payload),
-      payloadCommit: ctx.request.payloadCommit,
-      savedAt: new Date().toISOString(),
-    };
+  const handleReissue = async () => {
+    const values = reissueValues(payload);
     setBusy(true);
     try {
-      // Fresh state: the event may have expired or filled up since the popup opened.
-      const latest = mintBlockers((await service.getState()).ledger, next.eventId);
+      // Fresh state: the event may have expired or been deactivated since the popup opened.
+      const latest = mintBlockers((await service.getState()).ledger, eventIdHex, Date.now(), { reissue: true });
       if (latest.length) {
         setBlockers(latest);
         setStep(STEP_REVIEW);
         return;
       }
-      saveReissueRecord(next);
-      loadingFunction("Revoking the Old Credential", "Preparing transaction…", "");
-      await service.burn(BigInt(ctx.token.tokenId));
-      const burned = { ...next, stage: "burned" };
-      saveReissueRecord(burned);
-      setRecord(burned);
-      notifyTokenBurned(ctx.event.eventId, ctx.token.tokenId);
-      setStep(STEP_ISSUE);
-    } catch (error) {
-      console.error("Error revoking the old credential:", error);
-      // Nothing was burned: the record would only offer a re-issue that isn't due.
-      if (getReissueRecord(next.eventId, next.tokenId)?.stage === "burning") removeReissueRecord(next.eventId, next.tokenId);
-      errorFunction("Error", friendlyErrorMessage(error, "Failed to revoke the credential. Please try again."), "");
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const handleIssue = async () => {
-    setBusy(true);
-    try {
-      loadingFunction("Issuing the Updated Credential", "Preparing the private details…", "");
-      const { fields, root } = await buildCredentialAttributes(template, record.values);
-      loadingFunction("Issuing the Updated Credential", "Preparing transaction…", "");
+      loadingFunction("Re-issuing the Credential", "Preparing the private details…", "");
+      const { fields, root } = await buildCredentialAttributes(template, values);
+      loadingFunction("Re-issuing the Credential", "Preparing transaction…", "");
       const txHash = txHashOf(
-        await service.mintTo(fromHex(record.eventId), fromHex(record.holderPk), record.tokenMetadataURI, new Uint8Array(32), root),
+        await service.reissueCredential(BigInt(ctx.token.tokenId), ctx.token.tokenMetadataURI || "", new Uint8Array(32), root),
       );
-      removeReissueRecord(record.eventId, record.tokenId);
+      notifyTokenBurned(eventIdHex, ctx.token.tokenId);
       const pkg = {
         version: 1,
-        eventId: record.eventId,
-        issuerPk: record.issuerPk,
-        holderPk: record.holderPk,
+        eventId: eventIdHex,
+        issuerPk: ctx.event.issuerPk,
+        holderPk: payload.holderPk,
         credAttrRoot: Buffer.from(root).toString("hex"),
         fields,
       };
       try {
-        loadingFunction("Issuing the Updated Credential", "Sending the private details, encrypted…", "");
-        await deliverCredentialPackage(pkg, record.holderEncryptionKey);
+        loadingFunction("Re-issuing the Credential", "Sending the private details, encrypted…", "");
+        await deliverCredentialPackage(pkg, payload.holderEncryptionKey);
       } catch (deliveryError) {
         console.error("Encrypted delivery failed, falling back to a link:", deliveryError);
         setDeliveryLink(`${window.location.origin}/app/credential#${packageToLinkFragment(pkg)}`);
@@ -195,10 +158,10 @@ export default function ReviewCredentialUpdate() {
         "",
       );
     } catch (error) {
-      console.error("Error issuing the updated credential:", error);
+      console.error("Error re-issuing the credential:", error);
       errorFunction(
         "Error",
-        `${friendlyErrorMessage(error, "Failed to issue the updated credential.")} The old one is already revoked: you can finish from the subscribers list (Finish Re-issue).`,
+        `${friendlyErrorMessage(error, "Failed to re-issue the credential.")} The old credential is unchanged.`,
         "",
       );
     } finally {
@@ -279,8 +242,8 @@ export default function ReviewCredentialUpdate() {
         <div className="info-hint-card m-0">
           <Info size={16} />
           <p>
-            Check the holder's new document before re-issuing. Re-issuing revokes this credential and issues
-            a new one to the same holder, with the same images and the new number (two signatures).
+            Check the holder's new document before re-issuing. Re-issuing replaces this credential with a
+            new one for the same holder, with the same images and the new number, in one signature.
           </p>
         </div>
       </div>
@@ -292,7 +255,7 @@ export default function ReviewCredentialUpdate() {
       <div className="info-hint-card is-warning m-0">
         <CircleAlert size={16} />
         <p>
-          {record ? "The updated credential can't be issued: " : "This credential can't be re-issued, so it isn't revoked: "}
+          {"This credential can't be re-issued: "}
           {blockers.map((blocker) => MINT_BLOCKER_MESSAGES[blocker]).join(" ")}
         </p>
       </div>
@@ -300,7 +263,7 @@ export default function ReviewCredentialUpdate() {
 
   const renderValues = () => (
     <ul className="list-unstyled small m-0">
-      {Object.entries(record.values).map(([fieldId, value]) => (
+      {Object.entries(reissueValues(payload)).map(([fieldId, value]) => (
         <li key={fieldId} className="mb-1">
           <span className="text-muted">{fieldLabel(fieldId)}: </span>
           <span className="text-white">{value}</span>
@@ -309,7 +272,6 @@ export default function ReviewCredentialUpdate() {
     </ul>
   );
 
-
   return (
     <div className="d-flex flex-column w-100 drawer-modal-inner">
       <div className="drawer-header">
@@ -317,7 +279,7 @@ export default function ReviewCredentialUpdate() {
           <X size={15} />
         </button>
         <h4 className="text-center w-100 m-0 font-weight-semibold">
-          {ctx?.resume ? "Finish Re-issue" : "Review Update Request"}
+          Review Update Request
         </h4>
       </div>
 
@@ -368,27 +330,14 @@ export default function ReviewCredentialUpdate() {
             {renderBlockers()}
             {renderReview()}
           </div>
-        ) : step === STEP_REVOKE ? (
-          <div className="d-flex flex-column" style={{ gap: "12px" }}>
-            <p className="small m-0">
-              Step 2 of 3: revoke credential #{String(ctx.token.tokenId)}. Its holder keeps seeing it, marked
-              Burned, and it stops working for proofs.
-            </p>
-            <div className="info-hint-card is-warning m-0">
-              <Info size={16} />
-              <p>
-                Until step 3 the holder has no valid credential. If you stop in between, finish from the
-                subscribers list (Finish Re-issue).
-              </p>
-            </div>
-          </div>
         ) : (
           <div className="d-flex flex-column" style={{ gap: "12px" }}>
             <p className="small m-0">
-              Step 3 of 3: issue the updated credential to holder {truncateHex(record?.holderPk)}, with the same
-              images. They get a new identity code with it.
+              Step 2 of 2: replace credential #{String(ctx.token.tokenId)} of holder {truncateHex(payload?.holderPk)}{" "}
+              with these details and the same images. The old one shows as Re-issued and stops working for
+              proofs; the holder gets a new identity code with the new one.
             </p>
-            {record && renderValues()}
+            {payload && renderValues()}
             {renderBlockers()}
           </div>
         )}
@@ -407,7 +356,7 @@ export default function ReviewCredentialUpdate() {
               </button>
               <button
                 className="btn btn-gradient flex-grow-1"
-                onClick={() => setStep(STEP_REVOKE)}
+                onClick={() => setStep(STEP_REISSUE)}
                 disabled={busy || status !== "ready" || !matchesChain || isBlocked}
               >
                 <RefreshCw size={14} className="mr-2" />
@@ -415,21 +364,15 @@ export default function ReviewCredentialUpdate() {
               </button>
             </>
           )}
-          {step === STEP_REVOKE && (
+          {step === STEP_REISSUE && (
             <>
               <button className="btn btn-card-detail-action flex-grow-1" onClick={() => setStep(STEP_REVIEW)} disabled={busy}>
                 Back
               </button>
-              <button className="btn btn-destructive flex-grow-1" onClick={handleRevoke} disabled={busy || isBlocked}>
-                <Flame size={14} className="mr-2" />
-                {busy ? "Revoking…" : "Revoke and Continue"}
+              <button className="btn btn-gradient flex-grow-1" onClick={handleReissue} disabled={busy || isBlocked || !payload}>
+                {busy ? "Re-issuing…" : "Re-issue Credential"}
               </button>
             </>
-          )}
-          {step === STEP_ISSUE && (
-            <button className="btn btn-gradient btn-block" onClick={handleIssue} disabled={busy || !record || isBlocked}>
-              {busy ? "Issuing…" : "Issue Updated Credential"}
-            </button>
           )}
         </div>
       )}

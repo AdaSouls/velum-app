@@ -1,20 +1,19 @@
 import {
   fetchRequestRule,
-  groupAnswerable,
   listAnswerableRequests,
   loadCredentialPackage,
   proveAttendance,
-  proveAttribute,
+  proveAttributes,
   valueQualifies,
 } from '../../midnight/holder-proofs';
-import { getAllDisclosureRequests } from '../../midnight/indexer.service';
+import { getAllDisclosureRequests, getCredentialRequests } from '../../midnight/indexer.service';
 import { fetchRequestRuleCandidates } from '../../midnight/disclosure-sets';
 import { credentialAttributeTree, credentialPathOnChain, fetchDeliveredPackage } from '../../midnight/credential-delivery';
 import { saveCredentialPackage } from '../../midnight/credential-store';
 import { buildMerkleTree } from '../../midnight/merkle';
 
 // WASM-backed modules (compiled contract, transientHash) are mocked — see merkle.test.ts.
-jest.mock('../../midnight/indexer.service', () => ({ getAllDisclosureRequests: jest.fn() }));
+jest.mock('../../midnight/indexer.service', () => ({ getAllDisclosureRequests: jest.fn(), getCredentialRequests: jest.fn() }));
 jest.mock('../../midnight/disclosure-sets', () => ({ fetchRequestRuleCandidates: jest.fn() }));
 jest.mock('../../midnight/contract.service', () => ({ computeCredentialAttrLeaf: jest.fn((fieldId) => fieldId) }));
 jest.mock('../../midnight/merkle', () => ({ buildMerkleTree: jest.fn() }));
@@ -57,7 +56,30 @@ const request = (overrides: Record<string, unknown>) => ({
 const fakeRoot = (values: string[]) =>
   Buffer.from(Buffer.from(values.map(encode).join('|')).subarray(0, 32)).toString('hex');
 const oneOf = (...values: string[]) => ({ op: 'oneOf' as const, values });
+// A credential request (publishCredentialRequest) with its used conditions.
+const credentialRequest = (overrides: Record<string, unknown>) => ({
+  requestId: '33'.repeat(32),
+  verifierPk: ORGANIZER,
+  eventId: EVENT,
+  recipientPk: 'cc'.repeat(32),
+  conditions: [],
+  publishedBlock: 1,
+  publishedTx: null,
+  ...overrides,
+});
+// A condition as listAnswerableRequests hands it to proveAttributes.
+const condition = (slot: number, fieldId: string, setRoot: string, rule: any, label = 'Field') => ({
+  slot,
+  fieldId,
+  setRoot,
+  field: { fieldId, label },
+  label,
+  rule,
+  verified: true,
+});
 beforeEach(() => {
+  (getAllDisclosureRequests as jest.Mock).mockResolvedValue([]);
+  (getCredentialRequests as jest.Mock).mockResolvedValue([]);
   (buildMerkleTree as jest.Mock).mockImplementation(async (leaves: Uint8Array[]) => ({
     rootBytes: Buffer.from(Buffer.from(leaves.map((l) => Buffer.from(l).toString('hex')).join('|')).subarray(0, 32)),
     pathForLeaf: (leaf: Uint8Array) => {
@@ -105,23 +127,30 @@ describe('listAnswerableRequests', () => {
     const setRoot = fakeRoot(['Campo', 'Platea']);
     (getAllDisclosureRequests as jest.Mock).mockResolvedValue([
       request({ requestId: 'plain' }),
-      request({ requestId: 'sector', fieldId: SECTOR, setRoot, recipientPk: ME }),
       request({ requestId: 'plain-to-me', recipientPk: ME.toUpperCase() }),
       request({ requestId: 'plain-to-other', recipientPk: SOMEONE_ELSE }),
-      request({ requestId: 'sector-open', fieldId: SECTOR, setRoot }),
-      request({ requestId: 'sector-to-other', fieldId: SECTOR, setRoot, recipientPk: SOMEONE_ELSE }),
-      request({ requestId: 'event-level', fieldId: '03'.repeat(32), setRoot: '44'.repeat(32), recipientPk: ME }),
+      // An old single-field disclosure request can't be answered for a credential any more.
+      request({ requestId: 'sector-old', fieldId: SECTOR, setRoot, recipientPk: ME }),
       request({ requestId: 'other-event', eventId: 'ff'.repeat(32) }),
+    ]);
+    (getCredentialRequests as jest.Mock).mockResolvedValue([
+      credentialRequest({ requestId: 'older', publishedBlock: 5, conditions: [{ slot: 0, fieldId: SECTOR, setRoot }] }),
+      credentialRequest({ requestId: 'newer', publishedBlock: 9, conditions: [{ slot: 0, fieldId: SECTOR, setRoot }] }),
+      credentialRequest({ requestId: 'to-other', recipientPk: SOMEONE_ELSE, conditions: [{ slot: 0, fieldId: SECTOR, setRoot }] }),
     ]);
     (fetchRequestRuleCandidates as jest.Mock).mockResolvedValue([oneOf('Bogus'), oneOf('Campo', 'Platea')]);
 
     const items = await listAnswerableRequests(EVENT, [{ fieldId: SECTOR, label: 'Sector' }], ME);
+    expect(getCredentialRequests).toHaveBeenCalledWith({ recipientPk: ME, eventId: EVENT });
     expect(items.map((i) => [i.kind, i.request.requestId])).toEqual([
       ['attendance', 'plain'],
-      ['attribute', 'sector'],
       ['attendance', 'plain-to-me'],
+      ['attribute', 'newer'],
+      ['attribute', 'older'],
     ]);
-    expect(items[1]).toMatchObject({ label: 'Sector', rule: oneOf('Campo', 'Platea'), verified: true });
+    expect((items[2] as any).conditions).toEqual([
+      expect.objectContaining({ slot: 0, label: 'Sector', rule: oneOf('Campo', 'Platea'), verified: true }),
+    ]);
   });
 });
 
@@ -144,58 +173,66 @@ describe('identity checks', () => {
   // The fake tree's root is the hex of its leaves joined: the one-value identity set's root.
   const identityRoot = (valueHex: string) => Buffer.from(Buffer.from(valueHex).subarray(0, 32)).toString('hex');
 
-  it("checks an identity request against the holder's own document, without any published values", async () => {
-    (getAllDisclosureRequests as jest.Mock).mockResolvedValue([
-      request({ requestId: 'mine', verifierPk: VERIFIER, fieldId: DNI, setRoot: identityRoot(ID_VALUE), recipientPk: ME }),
-      request({ requestId: 'other-doc', verifierPk: VERIFIER, fieldId: DNI, setRoot: identityRoot('88'.repeat(32)), recipientPk: ME }),
+  it("checks an identity condition against the holder's own document, without any published values", async () => {
+    (getCredentialRequests as jest.Mock).mockResolvedValue([
+      credentialRequest({ requestId: 'mine', verifierPk: VERIFIER, publishedBlock: 2, conditions: [{ slot: 0, fieldId: DNI, setRoot: identityRoot(ID_VALUE) }] }),
+      credentialRequest({ requestId: 'other-doc', verifierPk: VERIFIER, publishedBlock: 1, conditions: [{ slot: 0, fieldId: DNI, setRoot: identityRoot('88'.repeat(32)) }] }),
     ]);
     const items = await listAnswerableRequests(EVENT, fields, ME, pkg);
-    expect(items.map((i) => [i.request.requestId, i.kind === 'attribute' && i.verified])).toEqual([
+    expect(items.map((i: any) => [i.request.requestId, i.conditions[0].verified])).toEqual([
       ['mine', true],
       ['other-doc', false],
     ]);
-    expect(items[0]).toMatchObject({ rule: { op: 'identity' } });
+    expect((items[0] as any).conditions[0]).toMatchObject({ rule: { op: 'identity' }, label: 'DNI' });
     expect(fetchRequestRuleCandidates).not.toHaveBeenCalled();
   });
 
-  it('groups an identity check with the questions its verifier asked, identity first', () => {
-    const item = (requestId: string, verifierPk: string, rule: any) =>
-      ({ kind: 'attribute', request: request({ requestId, verifierPk }), field: {}, label: '', rule, verified: true }) as any;
-    const groups = groupAnswerable([
-      item('grade', VERIFIER, oneOf('9')),
-      item('id', VERIFIER, { op: 'identity' }),
-      item('lone', ORGANIZER, oneOf('Campo')),
+  it('lists an identity check and its question as one request, in slot order', async () => {
+    const setRoot = fakeRoot(['Campo']);
+    (getCredentialRequests as jest.Mock).mockResolvedValue([
+      credentialRequest({
+        requestId: 'both',
+        verifierPk: VERIFIER,
+        conditions: [
+          { slot: 1, fieldId: SECTOR, setRoot },
+          { slot: 0, fieldId: DNI, setRoot: identityRoot(ID_VALUE) },
+        ],
+      }),
     ]);
-    expect(groups.map((g) => g.map((i) => i.request.requestId))).toEqual([['id', 'grade'], ['lone']]);
+    (fetchRequestRuleCandidates as jest.Mock).mockResolvedValue([oneOf('Campo')]);
+    const [item] = (await listAnswerableRequests(EVENT, fields, ME, pkg)) as any[];
+    expect(item.conditions.map((c: any) => [c.slot, c.label, c.verified])).toEqual([
+      [0, 'DNI', true],
+      [1, 'Sector', true],
+    ]);
   });
 
-  it('pairs each identity check only with the question published right after it, newest first', () => {
-    const item = (requestId: string, publishedBlock: number, rule: any) =>
-      ({ kind: 'attribute', request: request({ requestId, verifierPk: VERIFIER, publishedBlock }), field: {}, label: '', rule, verified: true }) as any;
-    const groups = groupAnswerable([
-      item('wrong-id', 10, { op: 'identity' }),
-      item('q1', 12, oneOf('A')),
-      item('id', 500, { op: 'identity' }),
-      item('q2', 503, oneOf('A')),
-      item('later', 900, oneOf('B')), // asked on its own, long after
-    ]);
-    expect(groups.map((g) => g.map((i) => i.request.requestId))).toEqual([['later'], ['id', 'q2'], ['wrong-id', 'q1']]);
-  });
-
-  it('proves an identity request with the one-value set', async () => {
+  it('proves an identity check and its question in one proof, unused slots padded', async () => {
     const service = {
       getState: jest.fn(async () => ({ ledger: { credentials: {} } })),
-      proveCredentialAttribute: jest.fn(async () => ({ public: { txHash: '0x1' } })),
+      proveCredentialAttributes: jest.fn(async () => ({ public: { txHash: '0x1' } })),
     } as any;
     (credentialPathOnChain as jest.Mock).mockResolvedValue({ cred: true });
     (credentialAttributeTree as jest.Mock).mockResolvedValue({ pathForLeaf: jest.fn(() => ({ attr: true })) });
-    const req = request({ fieldId: DNI, setRoot: identityRoot(ID_VALUE), recipientPk: ME });
-    await proveAttribute(service, TOKEN, req, { op: 'identity' }, pkg);
+    const req = credentialRequest({});
+    const conditions = [
+      condition(0, DNI, identityRoot(ID_VALUE), { op: 'identity' }, 'DNI'),
+      condition(1, SECTOR, fakeRoot(['Campo']), oneOf('Campo'), 'Sector'),
+    ];
+    await proveAttributes(service, TOKEN, req as any, conditions as any, pkg);
     expect(buildMerkleTree).toHaveBeenCalledWith([Uint8Array.from(Buffer.from(ID_VALUE, 'hex'))], 16);
-    expect(service.proveCredentialAttribute).toHaveBeenCalled();
+    const [, values, rands, attributePaths, setPaths, credPath] = service.proveCredentialAttributes.mock.calls[0];
+    expect(values).toHaveLength(4);
+    expect(Buffer.from(values[0]).toString('hex')).toBe(ID_VALUE);
+    expect(Buffer.from(values[1]).toString('hex')).toBe(encode('Campo'));
+    expect(values[2]).toEqual(new Uint8Array(32));
+    expect(rands[3]).toEqual(new Uint8Array(32));
+    expect(attributePaths).toHaveLength(4);
+    expect(setPaths).toHaveLength(4);
+    expect(credPath).toEqual({ cred: true });
 
-    const wrong = request({ fieldId: DNI, setRoot: identityRoot('88'.repeat(32)), recipientPk: ME });
-    await expect(proveAttribute(service, TOKEN, wrong, { op: 'identity' }, pkg)).rejects.toThrow(/different document/);
+    const wrong = [condition(0, DNI, identityRoot('88'.repeat(32)), { op: 'identity' }, 'DNI')];
+    await expect(proveAttributes(service, TOKEN, req as any, wrong as any, pkg)).rejects.toThrow(/different document/);
   });
 });
 
@@ -248,7 +285,7 @@ describe('proving', () => {
       getEncryptionKeyPair: jest.fn(),
       getState: jest.fn(async () => ({ ledger: { credentials: {} } })),
       proveEventAttendance: jest.fn(async () => ({ public: { txHash: '0xatt' } })),
-      proveCredentialAttribute: jest.fn(async () => ({ public: { txHash: '0xattr' } })),
+      proveCredentialAttributes: jest.fn(async () => ({ public: { txHash: '0xattr' } })),
     };
   });
 
@@ -265,31 +302,34 @@ describe('proving', () => {
     await expect(proveAttendance(service, TOKEN, '22'.repeat(32), PKG)).rejects.toThrow(/don't match its record/);
   });
 
-  it('proves a credential attribute with attribute, set and credential paths', async () => {
+  it('proves a credential condition with attribute, set and credential paths', async () => {
     (credentialPathOnChain as jest.Mock).mockResolvedValue({ cred: true });
     const rule = oneOf('Platea', 'Campo');
-    const req = request({ fieldId: SECTOR, setRoot: fakeRoot(rule.values) });
-    const result = await proveAttribute(service, TOKEN, req, rule, PKG);
-    expect(service.proveCredentialAttribute).toHaveBeenCalledWith(
-      expect.any(Uint8Array),
-      Uint8Array.from(Buffer.from(encode('Campo'), 'hex')),
-      Uint8Array.from(Buffer.from('11'.repeat(32), 'hex')),
-      { attr: true },
-      { set: true },
-      { cred: true },
-    );
+    const conditions = [condition(0, SECTOR, fakeRoot(rule.values), rule, 'Sector')];
+    const result = await proveAttributes(service, TOKEN, credentialRequest({}) as any, conditions as any, PKG);
+    const [requestId, values, rands, attributePaths, setPaths, credPath] = service.proveCredentialAttributes.mock.calls[0];
+    expect(Buffer.from(requestId).toString('hex')).toBe('33'.repeat(32));
+    expect(values[0]).toEqual(Uint8Array.from(Buffer.from(encode('Campo'), 'hex')));
+    expect(rands[0]).toEqual(Uint8Array.from(Buffer.from('11'.repeat(32), 'hex')));
+    expect(attributePaths).toEqual([{ attr: true }, { attr: true }, { attr: true }, { attr: true }]);
+    expect(setPaths).toEqual([{ set: true }, { set: true }, { set: true }, { set: true }]);
+    expect(credPath).toEqual({ cred: true });
     expect(result).toEqual({ txHash: '0xattr' });
   });
 
   it('stops before proving when the value is not in the accepted set', async () => {
-    const req = request({ fieldId: SECTOR, setRoot: fakeRoot(['Platea']) });
-    await expect(proveAttribute(service, TOKEN, req, oneOf('Platea'), PKG)).rejects.toThrow(/isn't one of the values/);
-    expect(service.proveCredentialAttribute).not.toHaveBeenCalled();
+    const conditions = [condition(0, SECTOR, fakeRoot(['Platea']), oneOf('Platea'), 'Sector')];
+    await expect(proveAttributes(service, TOKEN, credentialRequest({}) as any, conditions as any, PKG)).rejects.toThrow(
+      /isn't one of the values/,
+    );
+    expect(service.proveCredentialAttributes).not.toHaveBeenCalled();
   });
 
   it("stops before proving when the published rule doesn't rebuild the on-chain root", async () => {
-    const req = request({ fieldId: SECTOR, setRoot: fakeRoot(['Other']) });
-    await expect(proveAttribute(service, TOKEN, req, oneOf('Campo', 'VIP'), PKG)).rejects.toThrow(/don't match it on-chain/);
-    expect(service.proveCredentialAttribute).not.toHaveBeenCalled();
+    const conditions = [condition(0, SECTOR, fakeRoot(['Other']), oneOf('Campo', 'VIP'), 'Sector')];
+    await expect(proveAttributes(service, TOKEN, credentialRequest({}) as any, conditions as any, PKG)).rejects.toThrow(
+      /don't match the request on-chain/,
+    );
+    expect(service.proveCredentialAttributes).not.toHaveBeenCalled();
   });
 });

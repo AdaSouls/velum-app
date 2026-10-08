@@ -8,6 +8,23 @@ Este documento explica cómo usa el frontend los circuitos nuevos (`computeIdent
 `requestCredentialUpdate`, `dismissCredentialUpdate`): qué hace cada persona, qué viaja por dónde y
 quién puede ver cada dato. Al final hay una lista de cosas para que revises.
 
+> **Actualización 2026-10-08** (contrato `77e4ed8`, pedidos de varias condiciones y reemisión
+> atómica). Lo que sigue describe la versión del 2026-10-07; cambió así:
+> - El control de identidad y la pregunta son **un solo pedido**: `publishCredentialRequest` con
+>   la identidad en el slot 0 y la pregunta en el slot 1 (los demás en cero). Una firma.
+> - El holder los responde con **una sola prueba**: `proveCredentialAttributes`. Ya no hay
+>   agrupado por verificador, ni dos firmas, ni link con dos hashes, ni aviso "Identity proof
+>   missing" en `/app/verify`.
+> - El listado de pedidos del holder lee `/api/credential-requests?recipientPk=…&eventId=…`. Los
+>   pedidos de tenencia siguen en `/api/disclosure-requests`.
+> - Las reglas de las preguntas se siguen publicando en `/api/disclosure-sets`, todas bajo el
+>   `requestId`; el holder elige la que coincide con la raíz de cada slot. El control de identidad
+>   no publica regla. **El `server/` no necesita cambios.**
+> - La reemisión es **`reissueCredential`**, una transacción: no hay pasos revocar/emitir ni
+>   registro para retomar ("Finish Re-issue" desapareció). No gasta cupo; el frontend igual
+>   comprueba antes que el evento esté activo, sin vencer y con el emisor sin bloquear. El token
+>   viejo se muestra como "Re-issued" (el nuevo lo nombra en `replacesTokenId`).
+
 ---
 
 ## 1. Resumen
