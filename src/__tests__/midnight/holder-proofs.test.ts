@@ -169,6 +169,19 @@ describe('identity checks', () => {
     expect(groups.map((g) => g.map((i) => i.request.requestId))).toEqual([['id', 'grade'], ['lone']]);
   });
 
+  it('pairs each identity check only with the question published right after it, newest first', () => {
+    const item = (requestId: string, publishedBlock: number, rule: any) =>
+      ({ kind: 'attribute', request: request({ requestId, verifierPk: VERIFIER, publishedBlock }), field: {}, label: '', rule, verified: true }) as any;
+    const groups = groupAnswerable([
+      item('wrong-id', 10, { op: 'identity' }),
+      item('q1', 12, oneOf('A')),
+      item('id', 500, { op: 'identity' }),
+      item('q2', 503, oneOf('A')),
+      item('later', 900, oneOf('B')), // asked on its own, long after
+    ]);
+    expect(groups.map((g) => g.map((i) => i.request.requestId))).toEqual([['later'], ['id', 'q2'], ['wrong-id', 'q1']]);
+  });
+
   it('proves an identity request with the one-value set', async () => {
     const service = {
       getState: jest.fn(async () => ({ ledger: { credentials: {} } })),

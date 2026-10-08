@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { X, EyeOff, ShieldCheck, Users, Info, Copy, Check, Link2 } from "lucide-react";
 import { useDrawer, useDrawerDispatch } from "../../contexts/drawer/drawer.provider";
 import { errorFunction, loadingFunction, succesfullBlockchainCreation } from "../../toasts/sweetAlerts";
@@ -11,7 +11,7 @@ import {
   setTreeFor,
   valueQualifies,
 } from "../../../midnight/holder-proofs";
-import { addProofRecord } from "../../../midnight/proof-history";
+import { addProofRecord, getProofHistory } from "../../../midnight/proof-history";
 import { getEvent } from "../../../midnight/indexer.service";
 import { describeRule, ruleSize } from "../../../midnight/attribute-types";
 import ProofReceipt from "../../components/ProofReceipt";
@@ -143,6 +143,27 @@ export default function HolderProofs() {
 
   const closeDrawer = () => dispatch({ type: "CLOSE_DRAWER" });
 
+  // A group this browser already answered in full drops out (proof-history.ts keeps what it answered;
+  // the Proof history has its receipts). A request can be answered again, so this is just tidying.
+  const [answered, setAnswered] = useState(() => new Set());
+  useEffect(() => {
+    if (!ctx) return;
+    setAnswered(
+      new Set(
+        getProofHistory(ctx.token.holderPk, ctx.token.tokenId)
+          .map((record) => record.requestId?.toLowerCase())
+          .filter(Boolean),
+      ),
+    );
+  }, [ctx]);
+  const pendingGroups = useMemo(
+    () =>
+      items
+        ? groupAnswerable(items).filter((group) => !group.every((item) => answered.has(item.request.requestId.toLowerCase())))
+        : [],
+    [items, answered],
+  );
+
   // Answers every request of a group in turn — one signature each. A group is a single request, or
   // an identity check plus the questions its verifier asked with it (holder-proofs.ts).
   const answer = async (group) => {
@@ -153,6 +174,7 @@ export default function HolderProofs() {
     // attribute proof does name its holder, through the addressed request). Recorded once the group
     // ends, so each record knows its siblings and its Verify link checks them together.
     const record = () => {
+      setAnswered((current) => new Set([...current, ...done.map((receipt) => receipt.requestId.toLowerCase())]));
       const groupTxHashes = done.map((receipt) => receipt.txHash).filter(Boolean);
       done.forEach((receipt) =>
         addProofRecord(ctx.token.holderPk, ctx.token.tokenId, {
@@ -181,6 +203,7 @@ export default function HolderProofs() {
           question: questionFor(item),
           txHash,
           provenAt: new Date(),
+          requestId: item.request.requestId,
         });
       }
       record();
@@ -352,11 +375,11 @@ export default function HolderProofs() {
                 <img src={loadingGif} width="14" height="14" alt="" className="mr-2" />
                 Looking for requests on this event…
               </p>
-            ) : items.length === 0 ? (
-              <p className="text-muted small m-0">{mode.empty}</p>
+            ) : pendingGroups.length === 0 ? (
+              <p className="text-muted small m-0">{items.length ? "You've answered every request on this POAP." : mode.empty}</p>
             ) : (
               <ul className="list-unstyled m-0 d-flex flex-column" style={{ gap: "10px" }}>
-                {groupAnswerable(items).map((group) => {
+                {pendingGroups.map((group) => {
                   const groupId = group[0].request.requestId;
                   const reasons = group.map((item) => reasonFor(item, ctx.pkg)).filter(Boolean);
                   const together = group.length > 1;

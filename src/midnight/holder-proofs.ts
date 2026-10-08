@@ -134,28 +134,44 @@ export async function listAnswerableRequests(
   return answerable;
 }
 
-// Requests to answer together: an identity check and the questions the same verifier asked with it.
-// Everything else stays on its own. Order: identity first, as it was asked.
+// How far apart (in blocks) an identity check and its question can be published and still count as
+// asked together: publishDisclosureRequest.jsx sends the two back to back, a minute or two apart.
+export const ASKED_TOGETHER_BLOCKS = 100;
+
+// Requests to answer together: an identity check and the one question the same verifier published
+// right after it (publishDisclosureRequest.jsx asks at most one with each check). Pairing by block,
+// not just by verifier: the same verifier asking again later (say, after a check with the wrong
+// document) makes a new pair, so an old unanswerable check can't block the new one. Everything else
+// stays on its own. Identity first inside a group; newest groups first.
 export function groupAnswerable(items: AnswerableRequest[]): AnswerableRequest[][] {
-  const withIdentity = new Set(items.filter(isIdentityRequest).map((item) => item.request.verifierPk));
-  const groups = new Map<string, AnswerableRequest[]>();
+  const block = (item: AnswerableRequest) => item.request.publishedBlock ?? null;
+  const identities = items.filter(isIdentityRequest);
+  const groups = new Map<AnswerableRequest, AnswerableRequest[]>(identities.map((item) => [item, [item]]));
+  const paired = new Set<AnswerableRequest>();
+  for (const item of items) {
+    if (item.kind !== 'attribute' || isIdentityRequest(item)) continue;
+    const at = block(item);
+    const candidates = identities.filter((identity) => {
+      if (identity.request.verifierPk !== item.request.verifierPk) return false;
+      if ((groups.get(identity) as AnswerableRequest[]).length > 1) return false; // already has its question
+      const idAt = block(identity);
+      // Without blocks (older indexer) any unpaired check of the same verifier will do.
+      return at === null || idAt === null || (idAt <= at && at - idAt <= ASKED_TOGETHER_BLOCKS);
+    });
+    // The closest check before it.
+    const identity = candidates.sort((a, b) => (block(b) ?? 0) - (block(a) ?? 0))[0];
+    if (identity) {
+      (groups.get(identity) as AnswerableRequest[]).push(item);
+      paired.add(item);
+    }
+  }
   const out: AnswerableRequest[][] = [];
   for (const item of items) {
-    const verifier = item.request.verifierPk;
-    if (item.kind !== 'attribute' || !withIdentity.has(verifier)) {
-      out.push([item]);
-      continue;
-    }
-    let group = groups.get(verifier);
-    if (!group) {
-      group = [];
-      groups.set(verifier, group);
-      out.push(group);
-    }
-    group.push(item);
+    if (paired.has(item)) continue;
+    out.push(groups.get(item) ?? [item]);
   }
-  out.forEach((group) => group.sort((a, b) => Number(isIdentityRequest(b)) - Number(isIdentityRequest(a))));
-  return out;
+  const newest = (group: AnswerableRequest[]) => Math.max(...group.map((item) => block(item) ?? -1));
+  return out.sort((a, b) => newest(b) - newest(a));
 }
 
 // One set tree per rule, shared by the root check and the proof: a range can take seconds to build.

@@ -1983,6 +1983,17 @@ input[type="date"]::-webkit-calendar-picker-indicator {
   margin: 16px 0;
   min-height: 0;
   overflow-y: auto;
+  /* Scrollbar off the content: the box reaches 14px into .drawer-modal-inner's 20px side padding
+     and gives the same 14px back as padding, so the content stays exactly where it was and the
+     8px scrollbar sits in that gap (14px clear of inputs/text, 6px from the popup's edge). */
+  margin-right: -14px;
+  padding-right: 14px;
+}
+
+/* Same for the subscribers list's own scroller, inside the body's new right padding. */
+.drawer.drawer-modal .subscribers-list {
+  margin-right: -14px;
+  padding-right: 14px;
 }
 
 /* Layout only — no background of its own. The single glass surface lives on .drawer.drawer-modal

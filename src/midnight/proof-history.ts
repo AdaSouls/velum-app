@@ -15,6 +15,8 @@ export type ProofRecord = {
   question: string; // what was proven, in words — same text as the receipt
   txHash: string | null;
   provenAt: string; // ISO date
+  // The request it answered, so the holder's list can leave out what's already answered.
+  requestId?: string;
   // Answered together with other proofs (an identity check + its question, holderProofs.jsx): all
   // of their transactions, so the Verify link checks them as a set (verifyProof.jsx).
   groupTxHashes?: string[];

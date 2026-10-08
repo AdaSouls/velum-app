@@ -3,6 +3,11 @@ import { friendlyErrorMessage } from '../../midnight/friendly-error';
 const FALLBACK = 'Failed to create the event. Please try again.';
 
 describe('friendlyErrorMessage', () => {
+  it('asks to wait when the wallet still has a transaction pending', () => {
+    const error = new Error("Unexpected error submitting scoped transaction '<unnamed>': Error: A transaction is already pending.");
+    expect(friendlyErrorMessage(error, FALLBACK)).toMatch(/still sending your previous transaction/);
+  });
+
   it('explains an unreachable proof server instead of the raw scoped-transaction error', () => {
     const error = new Error(
       "Unexpected error submitting scoped transaction '<unnamed>': Error: 'check' returned an error: TypeError: Failed to fetch",

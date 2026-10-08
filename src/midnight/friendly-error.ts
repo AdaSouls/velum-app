@@ -129,6 +129,10 @@ export function friendlyErrorMessage(error: unknown, fallback: string): string {
   if (code === 'Disconnected' || /disconnected/i.test(all)) {
     return 'The connection to your wallet was lost. Reconnect it and try again.';
   }
+  // The wallet (1AM) sends one transaction at a time: the previous one hasn't confirmed yet.
+  if (/transaction is already pending/i.test(all)) {
+    return 'Your wallet is still sending your previous transaction. Wait a minute for it to confirm, then try again.';
+  }
   if (/mismatched verifier keys/i.test(all)) {
     return "This version of Velum doesn't match the deployed contract, so it can't connect. Reload the page; if it keeps happening, the app needs updating.";
   }
