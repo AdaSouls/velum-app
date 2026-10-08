@@ -12,6 +12,7 @@ import {
   valueQualifies,
 } from '../../../midnight/holder-proofs';
 import { getEvent } from '../../../midnight/indexer.service';
+import { getProofHistory, recordVerifyHashes } from '../../../midnight/proof-history';
 
 // holder-proofs pulls in the compiled contract (WASM) — mocked, see merkle.test.ts.
 // Grouping is unit-tested in holder-proofs.test.ts; here every request stands alone.
@@ -46,6 +47,7 @@ function renderView(mode = 'ownership') {
 
 describe('HolderProofs drawer view', () => {
   beforeEach(() => {
+    window.localStorage.clear();
     getEvent.mockResolvedValue({ eventId: TOKEN.eventId, liveTokens: 40 });
     groupAnswerable.mockImplementation((items) => items.map((item) => [item]));
     isIdentityRequest.mockImplementation((item) => item.rule?.op === 'identity');
@@ -120,6 +122,14 @@ describe('HolderProofs drawer view', () => {
     await waitFor(() => expect(proveAttribute).toHaveBeenCalledTimes(2));
     const link = await screen.findByLabelText(/^link that checks all proofs$/i);
     expect(link.value).toMatch(new RegExp(`/app/verify\\?tx=${'a1'.repeat(32)},${'a2'.repeat(32)}$`));
+    // Each receipt's own link checks the whole group too, never the question alone…
+    const receiptLinks = screen.getAllByDisplayValue(/\/app\/verify\?tx=/);
+    expect(receiptLinks).toHaveLength(3);
+    receiptLinks.forEach((input) => expect(input.value).toContain(`${'a1'.repeat(32)},${'a2'.repeat(32)}`));
+    // …and so does the Verify link kept in the proof history.
+    const history = getProofHistory(TOKEN.holderPk, TOKEN.tokenId);
+    expect(history).toHaveLength(2);
+    history.forEach((record) => expect(recordVerifyHashes(record)).toEqual(['a1'.repeat(32), 'a2'.repeat(32)]));
   });
 
   it('answers an attendance request anonymously and shows the receipt', async () => {

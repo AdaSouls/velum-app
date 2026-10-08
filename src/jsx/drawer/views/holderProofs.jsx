@@ -149,6 +149,20 @@ export default function HolderProofs() {
     const groupId = group[0].request.requestId;
     setBusyId(groupId);
     const done = [];
+    // Kept in this browser only: nothing on-chain links an attendance proof back to the token (an
+    // attribute proof does name its holder, through the addressed request). Recorded once the group
+    // ends, so each record knows its siblings and its Verify link checks them together.
+    const record = () => {
+      const groupTxHashes = done.map((receipt) => receipt.txHash).filter(Boolean);
+      done.forEach((receipt) =>
+        addProofRecord(ctx.token.holderPk, ctx.token.tokenId, {
+          ...receipt,
+          txHash: receipt.txHash ?? null,
+          provenAt: receipt.provenAt.toISOString(),
+          ...(groupTxHashes.length > 1 ? { groupTxHashes } : {}),
+        }),
+      );
+    };
     try {
       for (const [index, item] of group.entries()) {
         const label = group.length > 1 ? ` (${index + 1} of ${group.length})` : "";
@@ -162,21 +176,14 @@ export default function HolderProofs() {
           item.kind === "attendance"
             ? await proveAttendance(service, ctx.token, item.request.requestId, ctx.pkg)
             : await proveAttribute(service, ctx.token, item.request, item.rule, ctx.pkg);
-        const record = {
+        done.push({
           kind: item.kind === "attendance" ? "proveEventAttendance" : "proveCredentialAttribute",
           question: questionFor(item),
           txHash,
           provenAt: new Date(),
-        };
-        done.push(record);
-        // Kept in this browser only: nothing on-chain links an attendance proof back to the token (an
-        // attribute proof does name its holder, through the addressed request).
-        addProofRecord(ctx.token.holderPk, ctx.token.tokenId, {
-          ...record,
-          txHash: txHash ?? null,
-          provenAt: record.provenAt.toISOString(),
         });
       }
+      record();
       setReceipts(done);
       succesfullBlockchainCreation(
         done.length > 1 ? "Proofs Submitted" : "Proof Submitted",
@@ -191,7 +198,10 @@ export default function HolderProofs() {
         done.length ? `${done.length} of ${group.length} proofs went through. ${message}` : message,
         "",
       );
-      if (done.length) setReceipts(done);
+      if (done.length) {
+        record();
+        setReceipts(done);
+      }
     } finally {
       setBusyId(null);
       setStep(null);
@@ -276,7 +286,12 @@ export default function HolderProofs() {
               </div>
             )}
             {receipts.map((receipt, index) => (
-              <ProofReceipt key={receipt.txHash || index} {...receipt} eventName={ctx.eventName} />
+              <ProofReceipt
+                key={receipt.txHash || index}
+                {...receipt}
+                eventName={ctx.eventName}
+                groupTxHashes={receipts.length > 1 ? receipts.map((r) => r.txHash).filter(Boolean) : undefined}
+              />
             ))}
           </div>
         ) : (

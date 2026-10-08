@@ -119,8 +119,12 @@ export function verifyUrl(txHash: string | string[]): string {
 const MAX_PROOFS_PER_CHECK = 5;
 
 // The transaction hashes in a verify link or the search box: comma- or space-separated, deduplicated.
+// A whole pasted verify link (…/app/verify?tx=a,b) counts as its hashes.
 export function parseProofHashes(input: string): string[] {
   const hashes = (input || '')
+    .replace(/%2C/gi, ',')
+    .replace(/[^\s,]*[?&]tx=/g, ',') // a link's address part, up to its hashes
+    .replace(/&[^\s,]*/g, '') // and any parameter after them
     .split(/[\s,]+/)
     .map((hash) => hash.trim())
     .filter(Boolean);

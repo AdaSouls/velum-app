@@ -15,7 +15,15 @@ export type ProofRecord = {
   question: string; // what was proven, in words — same text as the receipt
   txHash: string | null;
   provenAt: string; // ISO date
+  // Answered together with other proofs (an identity check + its question, holderProofs.jsx): all
+  // of their transactions, so the Verify link checks them as a set (verifyProof.jsx).
+  groupTxHashes?: string[];
 };
+
+// The verify link for a record: the whole group when it was answered as one.
+export function recordVerifyHashes(record: ProofRecord): string | string[] {
+  return record.groupTxHashes && record.groupTxHashes.length > 1 ? record.groupTxHashes : (record.txHash as string);
+}
 
 // holderPk (holder_pk(issuer) of this token's owner) scopes the list to one wallet + contract
 // deployment: a redeploy starts tokenIds from 0 again, but the holder pk changes with it.

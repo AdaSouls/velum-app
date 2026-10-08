@@ -102,7 +102,36 @@ async function identityChecksFor(details, fields) {
 // One proof on the page: looks the transaction up, decodes what it proved and reports the result
 // up (onChecked), so the page can tell whether an identity check that came with a question was
 // answered too. `identityAnswered` = request ids of the identity proofs verified on this page.
-function ProofSection({ hash, contractAddress, onChecked, identityAnswered }) {
+// Inside the "Identity proof missing" warning: paste the identity proof's link or hash to check it
+// on this same page, next to the question it came with.
+function AddProofForm({ onAdd }) {
+  const [value, setValue] = useState("");
+  return (
+    <form
+      className="d-flex mt-2"
+      style={{ gap: "8px" }}
+      onSubmit={(formEvent) => {
+        formEvent.preventDefault();
+        onAdd(value);
+        setValue("");
+      }}
+    >
+      <input
+        type="text"
+        className="form-control form-control-sm"
+        placeholder="Identity proof link or transaction hash"
+        aria-label="Identity proof link or transaction hash"
+        value={value}
+        onChange={(changeEvent) => setValue(changeEvent.target.value)}
+      />
+      <button type="submit" className="btn btn-card-detail-action btn-sm flex-shrink-0" disabled={!value.trim()}>
+        Add
+      </button>
+    </form>
+  );
+}
+
+function ProofSection({ hash, contractAddress, onChecked, identityAnswered, onAddProof }) {
   const [result, setResult] = useState(null);
   const [details, setDetails] = useState(null);
   const [context, setContext] = useState(null);
@@ -221,12 +250,15 @@ function ProofSection({ hash, contractAddress, onChecked, identityAnswered }) {
           {expectsIdentity && !identityShown && (
             <div className="info-hint-card is-warning m-0" role="alert">
               <CircleAlert size={16} />
-              <p>
-                <span className="text-white">Identity proof missing.</span> Whoever asked this question also asked
-                this holder for an identity check. Without that proof, this answer could come from someone
-                else's credential (a borrowed key). Ask the holder for both proofs, or for the single link that
-                checks them together.
-              </p>
+              <div style={{ minWidth: 0 }} className="flex-grow-1">
+                <p className="m-0">
+                  <span className="text-white">Identity proof missing.</span> Whoever asked this question also
+                  asked this holder for an identity check. Without that proof, this answer could come from
+                  someone else's credential (a borrowed key). Ask the holder for both proofs, or for the single
+                  link that checks them together. If you have the identity proof, add it here:
+                </p>
+                <AddProofForm onAdd={onAddProof} />
+              </div>
             </div>
           )}
 
@@ -390,12 +422,20 @@ function ProofSetSummary({ hashes, checks }) {
 // link can carry several transactions (?tx=a,b) — an identity check and the question asked with it —
 // so they're checked together.
 export default function VerifyProof() {
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [txHash, setTxHash] = useState(searchParams.get("tx") || "");
   const [submitted, setSubmitted] = useState(searchParams.get("tx") || "");
   const hashes = useMemo(() => parseProofHashes(submitted), [submitted]);
   const [checks, setChecks] = useState({});
-  useEffect(() => setChecks({}), [hashes]);
+  // Drop only the results of hashes no longer on the page: a section that stays (same hash) doesn't
+  // check again, so wiping its result would leave the summary waiting forever.
+  useEffect(
+    () =>
+      setChecks((current) =>
+        Object.fromEntries(Object.entries(current).filter(([hash]) => hashes.includes(hash))),
+      ),
+    [hashes],
+  );
   const onChecked = useCallback((hash, check) => setChecks((current) => ({ ...current, [hash]: check })), []);
   const identityAnswered = useMemo(
     () =>
@@ -408,6 +448,17 @@ export default function VerifyProof() {
   );
 
   const contractAddress = process.env.REACT_APP_MIDNIGHT_CONTRACT_ADDRESS;
+
+  // Adds proofs to the ones on the page (and to the URL, so the page can be shared as a set).
+  const addProof = useCallback(
+    (input) => {
+      const next = parseProofHashes(`${submitted},${input}`).join(",");
+      setSubmitted(next);
+      setTxHash(next);
+      setSearchParams({ tx: next });
+    },
+    [submitted, setSearchParams],
+  );
 
   const verifyForm = (
     <form
@@ -458,6 +509,7 @@ export default function VerifyProof() {
                 contractAddress={contractAddress}
                 onChecked={onChecked}
                 identityAnswered={identityAnswered}
+                onAddProof={addProof}
               />
             </React.Fragment>
           ))}

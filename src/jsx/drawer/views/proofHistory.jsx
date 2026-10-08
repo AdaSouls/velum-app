@@ -1,6 +1,7 @@
 import { X, ExternalLink, ShieldCheck } from "lucide-react";
 import { useDrawer, useDrawerDispatch } from "../../contexts/drawer/drawer.provider";
 import { PROOF_KINDS, verifyUrl } from "../../../midnight/proof-verification";
+import { recordVerifyHashes } from "../../../midnight/proof-history";
 import { formatUntil, parseValidity, validityStatus } from "../../../midnight/validity";
 
 // The holder's proofs for one POAP (proof-history.ts), opened from the expanded poapCard.jsx
@@ -48,7 +49,7 @@ export default function ProofHistory() {
                 </div>
                 {record.txHash && (
                   <a
-                    href={verifyUrl(record.txHash)}
+                    href={verifyUrl(recordVerifyHashes(record))}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="btn btn-card-detail-action btn-sm flex-shrink-0"

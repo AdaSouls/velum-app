@@ -12,10 +12,14 @@ const truncateHex = (hex) => (hex ? `${hex.slice(0, 10)}…${hex.slice(-8)}` : "
 // kind: a circuit name from PROOF_KINDS. question: what was proven, in words ("Sector is one of:
 // Campo, Platea"). eventName / tokenId: context; tokenId only for ownership (the other proofs
 // don't reveal it).
-export default function ProofReceipt({ kind, question, eventName, tokenId, txHash, provenAt }) {
+//
+// groupTxHashes: every transaction of a group answered together (an identity check + its question,
+// holderProofs.jsx), so this receipt's link checks the whole set — never the question alone.
+export default function ProofReceipt({ kind, question, eventName, tokenId, txHash, provenAt, groupTxHashes }) {
   const info = PROOF_KINDS[kind] || { title: "Proof", description: "" };
   const [copied, setCopied] = useState(false);
-  const link = txHash ? verifyUrl(txHash) : null;
+  const inGroup = groupTxHashes?.length > 1;
+  const link = txHash ? verifyUrl(inGroup ? groupTxHashes : txHash) : null;
 
   const copyLink = async () => {
     try {
@@ -72,7 +76,11 @@ export default function ProofReceipt({ kind, question, eventName, tokenId, txHas
 
       {link && (
         <div className="proof-receipt-verify">
-          <p className="m-0 small text-muted">Anyone can check this proof, no wallet needed:</p>
+          <p className="m-0 small text-muted">
+            {inGroup
+              ? `Anyone can check this proof with the other ${groupTxHashes.length - 1} answered with it, no wallet needed:`
+              : "Anyone can check this proof, no wallet needed:"}
+          </p>
           <div className="d-flex align-items-center" style={{ gap: "8px" }}>
             <input
               id="proofVerifyLink"

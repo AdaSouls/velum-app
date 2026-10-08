@@ -1,5 +1,6 @@
 import React from 'react';
 import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import VerifyProof from '../../jsx/pages/verifyProof';
 
@@ -220,6 +221,19 @@ describe('VerifyProof page', () => {
       expect(screen.getByText(/same holder, including the identity check/i)).toBeInTheDocument();
       expect(await screen.findByText(/confirmed by the identity proof on this page/i)).toBeInTheDocument();
       expect(screen.getByText('DNI (National ID · ARG) matches the document checked')).toBeInTheDocument();
+      expect(screen.queryByText(/identity proof missing/i)).not.toBeInTheDocument();
+    });
+
+    it('lets the verifier add the missing identity proof from its link', async () => {
+      renderAt(GRADE_TX);
+      await screen.findByText(/identity proof missing/i);
+      await userEvent.type(
+        screen.getByLabelText(/identity proof link or transaction hash/i),
+        `https://velum.example/app/verify?tx=${ID_TX}`,
+      );
+      await userEvent.click(screen.getByRole('button', { name: /^add$/i }));
+      expect(await screen.findByText('All 2 proofs are valid')).toBeInTheDocument();
+      expect(await screen.findByText(/confirmed by the identity proof on this page/i)).toBeInTheDocument();
       expect(screen.queryByText(/identity proof missing/i)).not.toBeInTheDocument();
     });
   });

@@ -21,7 +21,7 @@ import {
 import { loadCredentialPackage } from "../../midnight/holder-proofs";
 import { decodeValueHex } from "../../midnight/credential-store";
 import { documentLabel, maskDocNumber } from "../../midnight/identity";
-import { getProofHistory, PROOF_HISTORY_EVENT } from "../../midnight/proof-history";
+import { getProofHistory, PROOF_HISTORY_EVENT, recordVerifyHashes } from "../../midnight/proof-history";
 import { blockTimestamp, verifyUrl } from "../../midnight/proof-verification";
 import { describeValidity, formatUntil, parseValidity, validityStatus } from "../../midnight/validity";
 import { TOKEN_BURNED_EVENT } from "../../midnight/token-events";
@@ -856,7 +856,7 @@ const PoapCard = forwardRef(({ poap, isExpanded = false, onExpand = () => {}, on
                           {record.txHash && (
                             <>
                               {" · "}
-                              <a href={verifyUrl(record.txHash)} target="_blank" rel="noopener noreferrer" className="text-white">
+                              <a href={verifyUrl(recordVerifyHashes(record))} target="_blank" rel="noopener noreferrer" className="text-white">
                                 Verify <ExternalLink size={11} />
                               </a>
                             </>
