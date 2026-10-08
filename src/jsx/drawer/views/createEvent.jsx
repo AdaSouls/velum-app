@@ -4,7 +4,7 @@ import {
 } from "../../contexts/drawer/drawer.provider";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "react-bootstrap";
-import { X } from "lucide-react";
+import { X, Info } from "lucide-react";
 import {
   errorFunction,
   loadingFunction,
@@ -62,6 +62,31 @@ const STEP_POAP_IMAGE = "poapImage";
 
 const CATEGORY_LIST = Object.values(EVENT_CATEGORIES);
 
+const PROFILE_SUMMARY_ROWS = [
+  ["name", "Name"],
+  ["addressLine", "Address"],
+  ["locality", "City"],
+  ["region", "State / Province"],
+  ["country", "Country"],
+  ["postalCode", "Postal code"],
+];
+
+// Read-only view of the organizer details the event will carry (STEP_ORG_PROFILE, profile switch on).
+function OrganizerProfileSummary({ profile }) {
+  const rows = PROFILE_SUMMARY_ROWS.filter(([key]) => profile?.[key]);
+  if (!rows.length) return null;
+  return (
+    <ul className="list-unstyled small mb-0 mt-3">
+      {rows.map(([key, label]) => (
+        <li key={key} className="mb-1">
+          <span className="text-muted">{label}: </span>
+          <span className="text-white">{profile[key]}</span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 export default function CreateEvent() {
   const { midnight: { provider } } = useDrawer();
   const dispatch = useDrawerDispatch();
@@ -82,13 +107,22 @@ export default function CreateEvent() {
   const [validityUnit, setValidityUnit] = useState("");
   const [channels, setChannels] = useState([]);
   const [taxonomyValues, setTaxonomyValues] = useState({});
-  // Prefilled from this identity's saved organizer profile (organizer-profile.ts), and saved back
-  // after a successful create while saveAsProfile is on, so it's typed once, not per event.
+  // This identity's saved organizer profile (organizer-profile.ts). With one, the step only shows a
+  // "Use my organizer profile" switch (on) and a summary of what the event will carry; turning it
+  // off opens the fields, prefilled, to change them for this event (saveAsProfile off by default, so
+  // a one-off change doesn't overwrite the profile). Without one, the fields are open and
+  // saveAsProfile starts on, so the details are typed once, not per event. Saved only after a
+  // successful create.
+  const [savedProfile, setSavedProfile] = useState(() => getOrganizerProfile(provider?.address));
+  const [useSavedProfile, setUseSavedProfile] = useState(() => Boolean(getOrganizerProfile(provider?.address)));
   const [organizationProfile, setOrganizationProfile] = useState(() => getOrganizerProfile(provider?.address) ?? {});
-  const [saveAsProfile, setSaveAsProfile] = useState(true);
+  const [saveAsProfile, setSaveAsProfile] = useState(() => !getOrganizerProfile(provider?.address));
   useEffect(() => {
     const saved = getOrganizerProfile(provider?.address);
+    setSavedProfile(saved);
     if (!saved) return;
+    setUseSavedProfile(true);
+    setSaveAsProfile(false);
     setOrganizationProfile((current) =>
       Object.values(current).some((value) => String(value ?? "").trim()) ? current : saved,
     );
@@ -129,6 +163,10 @@ export default function CreateEvent() {
   // see mintPoap.jsx) with their own per-recipient image, so there's nothing for this step to set:
   // asking for one shared "POAP image" here would be misleading, not just redundant.
   const showOrgAddress = isOrganizationProfileApplicable(category, taxonomyValues);
+  const usingSavedProfile = useSavedProfile && Boolean(savedProfile);
+  // What goes into the event's public metadata: the address only where this category asks for it.
+  const profileSource = usingSavedProfile ? savedProfile : organizationProfile;
+  const eventOrganization = showOrgAddress ? profileSource : { name: profileSource?.name };
   const steps = useMemo(() => {
     if (!categoryConfig) return [];
     const list = [STEP_DETAILS, STEP_IMAGE, STEP_SUPPLY, STEP_CHANNELS, STEP_TAXONOMY, STEP_ORG_PROFILE];
@@ -313,7 +351,7 @@ export default function CreateEvent() {
       }
 
       const taxonomyEntries = serializeTaxonomyValues(category, taxonomyValues);
-      const hasOrgProfileField = Object.values(organizationProfile).some(
+      const hasOrgProfileField = Object.values(eventOrganization).some(
         (value) => typeof value === "string" && value.trim().length > 0,
       );
 
@@ -326,7 +364,7 @@ export default function CreateEvent() {
         category,
         ...taxonomyEntries,
         ...(channels.length ? { channels } : {}),
-        ...(hasOrgProfileField ? { organization: organizationProfile } : {}),
+        ...(hasOrgProfileField ? { organization: eventOrganization } : {}),
         ...(credentialAttributeFieldsForMetadata.length
           ? { credentialAttributeFields: credentialAttributeFieldsForMetadata }
           : {}),
@@ -353,7 +391,7 @@ export default function CreateEvent() {
       );
 
       // Only after the transaction succeeded: a failed create leaves the saved profile as it was.
-      if (saveAsProfile) saveOrganizerProfile(provider.address, organizationProfile);
+      if (!usingSavedProfile && saveAsProfile) saveOrganizerProfile(provider.address, organizationProfile);
 
       closeDrawer();
       succesfullBlockchainCreation("Event Created Successfully", `Transaction: ${txHash}`, "");
@@ -501,6 +539,19 @@ export default function CreateEvent() {
                 </small>
               </div>
 
+              {category === "credential" && (
+                <div className="col-12 mb-3">
+                  <div className="info-hint-card m-0">
+                    <Info size={16} />
+                    <p>
+                      Re-issuing a credential (for example when its holder's document changes) uses one more
+                      place of the supply, since revoking doesn't free one, and isn't possible after the
+                      expiration date. Leave room, or use 0 for unlimited.
+                    </p>
+                  </div>
+                </div>
+              )}
+
             </>
           )}
 
@@ -518,29 +569,61 @@ export default function CreateEvent() {
 
           {currentStepKey === STEP_ORG_PROFILE && (
             <>
-              <OrganizationProfileFields
-                values={organizationProfile}
-                onChange={setOrganizationProfile}
-                showAddress={showOrgAddress}
-              />
-              <div className="col-12 mt-2">
-                <div className="form-check form-switch mb-0 d-flex align-items-start" style={{ gap: "10px" }}>
-                  <input
-                    className="form-check-input flex-shrink-0"
-                    type="checkbox"
-                    id="saveAsProfile"
-                    checked={saveAsProfile}
-                    onChange={(event) => setSaveAsProfile(event.target.checked)}
-                  />
-                  <label className="form-check-label" htmlFor="saveAsProfile">
-                    <span className="d-block">Save as my organizer profile</span>
-                    <small className="form-text text-muted d-block mt-1">
-                      These details are shown publicly on your events. Saved with your encrypted
-                      backup, so they're filled in next time.
-                    </small>
-                  </label>
+              {savedProfile && (
+                <div className="col-12 mb-3">
+                  <div className="drawer-modal-preview-card">
+                    <div className="d-flex align-items-center" style={{ gap: "14px" }}>
+                      <div className="form-check form-switch mb-0 flex-shrink-0">
+                        <input
+                          className="form-check-input"
+                          type="checkbox"
+                          id="useSavedProfile"
+                          aria-label="Use my organizer profile"
+                          checked={useSavedProfile}
+                          onChange={(event) => setUseSavedProfile(event.target.checked)}
+                        />
+                      </div>
+                      <div>
+                        <span className="d-block font-weight-semibold">Use my organizer profile</span>
+                        <small className="form-text text-muted d-block mt-1">
+                          {useSavedProfile
+                            ? "These details are shown publicly on this event."
+                            : "Change the details below for this event."}
+                        </small>
+                      </div>
+                    </div>
+                    {useSavedProfile && <OrganizerProfileSummary profile={eventOrganization} />}
+                  </div>
                 </div>
-              </div>
+              )}
+              {!usingSavedProfile && (
+                <>
+                  <OrganizationProfileFields
+                    values={organizationProfile}
+                    onChange={setOrganizationProfile}
+                    showAddress={showOrgAddress}
+                  />
+                  <div className="col-12 mt-2">
+                    <div className="form-check form-switch mb-0 d-flex align-items-start" style={{ gap: "10px" }}>
+                      <input
+                        className="form-check-input flex-shrink-0"
+                        type="checkbox"
+                        id="saveAsProfile"
+                        checked={saveAsProfile}
+                        onChange={(event) => setSaveAsProfile(event.target.checked)}
+                      />
+                      <label className="form-check-label" htmlFor="saveAsProfile">
+                        <span className="d-block">Save as my organizer profile</span>
+                        <small className="form-text text-muted d-block mt-1">
+                          {savedProfile
+                            ? "Replaces your saved profile with these details for the next events."
+                            : "These details are shown publicly on your events. Saved with your encrypted backup, so they're filled in next time."}
+                        </small>
+                      </label>
+                    </div>
+                  </div>
+                </>
+              )}
             </>
           )}
 

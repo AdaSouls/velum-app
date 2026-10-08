@@ -14,6 +14,7 @@ import { notifyTokenBurned } from "../../../midnight/token-events";
 import { documentLabel } from "../../../midnight/identity";
 import { txHashOf } from "../../../midnight/tx-result";
 import { friendlyErrorMessage } from "../../../midnight/friendly-error";
+import { MINT_BLOCKER_MESSAGES, mintBlockers } from "../../../midnight/mint-readiness";
 import loadingGif from "../../../images/loading.gif";
 
 const truncateHex = (hex) => (hex ? `${hex.slice(0, 10)}…${hex.slice(-8)}` : "N/A");
@@ -35,6 +36,9 @@ const STEPS = [STEP_REVIEW, STEP_REVOKE, STEP_ISSUE];
 //      details encrypted to the holder's key from the request.
 // Between 2 and 3 the holder has no credential, so a record (reissue-store.ts) is saved before the
 // burn; reopening from the subscribers list ("Finish re-issue") resumes at step 3.
+// Before any of that, the event must still accept a new mint (mint-readiness.ts: active, not
+// expired, supply left, organizer not blocked, contract not paused) — checked on open and again
+// right before the burn, so a re-issue that can't finish never revokes the old credential.
 export default function ReviewCredentialUpdate() {
   const { midnight, reviewUpdateContext: ctx } = useDrawer();
   const dispatch = useDrawerDispatch();
@@ -48,6 +52,7 @@ export default function ReviewCredentialUpdate() {
   const [busy, setBusy] = useState(false);
   const [deliveryLink, setDeliveryLink] = useState(null);
   const [linkCopied, setLinkCopied] = useState(false);
+  const [blockers, setBlockers] = useState([]);
 
   const template = ctx?.credentialFields || [];
   const fieldLabel = (fieldId) => template.find((field) => field.fieldId === fieldId)?.label || "Field";
@@ -84,6 +89,22 @@ export default function ReviewCredentialUpdate() {
     };
   }, [ctx, service]);
 
+  const eventIdHex = ctx?.resume?.eventId || ctx?.event?.eventId;
+  useEffect(() => {
+    if (!eventIdHex || !service) return undefined;
+    let cancelled = false;
+    service
+      .getState()
+      .then(({ ledger }) => {
+        if (!cancelled) setBlockers(mintBlockers(ledger, eventIdHex));
+      })
+      .catch((error) => console.warn("Could not check whether the event still accepts a re-issue:", error));
+    return () => {
+      cancelled = true;
+    };
+  }, [eventIdHex, service]);
+  const isBlocked = blockers.length > 0;
+
   const closeDrawer = () => dispatch({ type: "CLOSE_DRAWER" });
 
   const handleDismiss = async () => {
@@ -115,6 +136,13 @@ export default function ReviewCredentialUpdate() {
     };
     setBusy(true);
     try {
+      // Fresh state: the event may have expired or filled up since the popup opened.
+      const latest = mintBlockers((await service.getState()).ledger, next.eventId);
+      if (latest.length) {
+        setBlockers(latest);
+        setStep(STEP_REVIEW);
+        return;
+      }
       saveReissueRecord(next);
       loadingFunction("Revoking the Old Credential", "Preparing transaction…", "");
       await service.burn(BigInt(ctx.token.tokenId));
@@ -259,6 +287,17 @@ export default function ReviewCredentialUpdate() {
     );
   };
 
+  const renderBlockers = () =>
+    isBlocked && (
+      <div className="info-hint-card is-warning m-0">
+        <CircleAlert size={16} />
+        <p>
+          {record ? "The updated credential can't be issued: " : "This credential can't be re-issued, so it isn't revoked: "}
+          {blockers.map((blocker) => MINT_BLOCKER_MESSAGES[blocker]).join(" ")}
+        </p>
+      </div>
+    );
+
   const renderValues = () => (
     <ul className="list-unstyled small m-0">
       {Object.entries(record.values).map(([fieldId, value]) => (
@@ -325,7 +364,10 @@ export default function ReviewCredentialUpdate() {
             </div>
           </div>
         ) : step === STEP_REVIEW ? (
-          renderReview()
+          <div className="d-flex flex-column" style={{ gap: "12px" }}>
+            {renderBlockers()}
+            {renderReview()}
+          </div>
         ) : step === STEP_REVOKE ? (
           <div className="d-flex flex-column" style={{ gap: "12px" }}>
             <p className="small m-0">
@@ -347,6 +389,7 @@ export default function ReviewCredentialUpdate() {
               images. They get a new identity code with it.
             </p>
             {record && renderValues()}
+            {renderBlockers()}
           </div>
         )}
       </div>
@@ -365,7 +408,7 @@ export default function ReviewCredentialUpdate() {
               <button
                 className="btn btn-gradient flex-grow-1"
                 onClick={() => setStep(STEP_REVOKE)}
-                disabled={busy || status !== "ready" || !matchesChain}
+                disabled={busy || status !== "ready" || !matchesChain || isBlocked}
               >
                 <RefreshCw size={14} className="mr-2" />
                 Re-issue
@@ -377,14 +420,14 @@ export default function ReviewCredentialUpdate() {
               <button className="btn btn-card-detail-action flex-grow-1" onClick={() => setStep(STEP_REVIEW)} disabled={busy}>
                 Back
               </button>
-              <button className="btn btn-destructive flex-grow-1" onClick={handleRevoke} disabled={busy}>
+              <button className="btn btn-destructive flex-grow-1" onClick={handleRevoke} disabled={busy || isBlocked}>
                 <Flame size={14} className="mr-2" />
                 {busy ? "Revoking…" : "Revoke and Continue"}
               </button>
             </>
           )}
           {step === STEP_ISSUE && (
-            <button className="btn btn-gradient btn-block" onClick={handleIssue} disabled={busy || !record}>
+            <button className="btn btn-gradient btn-block" onClick={handleIssue} disabled={busy || !record || isBlocked}>
               {busy ? "Issuing…" : "Issue Updated Credential"}
             </button>
           )}

@@ -350,19 +350,54 @@ describe('CreateEvent drawer view', () => {
       await userEvent.type(screen.getByLabelText(/Name/i), 'DevCon');
       await clickNext();
       await clickNext();
-      while (!screen.queryByLabelText('Organizer Name')) {
+      while (!screen.queryByLabelText('Organizer Name') && !screen.queryByLabelText('Use my organizer profile')) {
         await clickNext();
       }
     };
 
-    it('prefills the organizer step from the saved profile', async () => {
+    it('with a saved profile, shows the switch on and a summary instead of the fields', async () => {
       saveOrganizerProfile('aa'.repeat(32), { name: 'Acme Labs', country: 'AR' });
       renderWithProviders(<CreateEvent />, { drawerValue: buildDrawerValue(jest.fn()) });
 
       await walkToOrgProfile();
 
+      expect(screen.getByLabelText('Use my organizer profile')).toBeChecked();
+      expect(screen.getByText('Acme Labs')).toBeInTheDocument();
+      expect(screen.queryByLabelText('Organizer Name')).not.toBeInTheDocument();
+    });
+
+    it('turning the switch off opens the fields prefilled, not saving by default', async () => {
+      saveOrganizerProfile('aa'.repeat(32), { name: 'Acme Labs' });
+      renderWithProviders(<CreateEvent />, { drawerValue: buildDrawerValue(jest.fn()) });
+
+      await walkToOrgProfile();
+      await userEvent.click(screen.getByLabelText('Use my organizer profile'));
+
       expect(screen.getByLabelText('Organizer Name')).toHaveValue('Acme Labs');
+      expect(screen.getByLabelText(/save as my organizer profile/i)).not.toBeChecked();
+    });
+
+    it('without a saved profile, shows the fields with saving on', async () => {
+      renderWithProviders(<CreateEvent />, { drawerValue: buildDrawerValue(jest.fn()) });
+
+      await walkToOrgProfile();
+
+      expect(screen.queryByLabelText('Use my organizer profile')).not.toBeInTheDocument();
       expect(screen.getByLabelText(/save as my organizer profile/i)).toBeChecked();
+    });
+
+    it('creates with the saved profile when the switch stays on', async () => {
+      saveOrganizerProfile('aa'.repeat(32), { name: 'Acme Labs' });
+      const createEvent = jest.fn().mockResolvedValue({ txHash: '0xabc' });
+      renderWithProviders(<CreateEvent />, { drawerValue: buildDrawerValue(createEvent) });
+
+      await walkToOrgProfile();
+      while (screen.queryByRole('button', { name: /^next$/i })) await clickNext();
+      await useEventImageForPoap();
+      await clickCreate();
+
+      await waitFor(() => expect(createEvent).toHaveBeenCalled());
+      expect(uploadJSONToIPFS).toHaveBeenCalledWith(expect.objectContaining({ organization: { name: 'Acme Labs' } }));
     });
 
     it('saves what was used as the profile after a successful create', async () => {
@@ -385,6 +420,7 @@ describe('CreateEvent drawer view', () => {
       renderWithProviders(<CreateEvent />, { drawerValue: buildDrawerValue(createEvent) });
 
       await walkToOrgProfile();
+      await userEvent.click(screen.getByLabelText('Use my organizer profile'));
       await userEvent.clear(screen.getByLabelText('Organizer Name'));
       await userEvent.type(screen.getByLabelText('Organizer Name'), 'Other');
       while (screen.queryByRole('button', { name: /^next$/i })) await clickNext();

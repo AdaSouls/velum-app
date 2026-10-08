@@ -78,6 +78,17 @@ const serviceMock = () => ({
   mintTo: jest.fn().mockResolvedValue({ public: { txHash: '0xm' } }),
 });
 
+// A ledger whose event is expired, for the "can't re-issue" checks (mint-readiness.ts).
+const expiredLedger = () => ({
+  credentials: {},
+  isPaused: false,
+  events: {
+    member: () => true,
+    lookup: () => ({ maxSupply: 0n, minted: 3n, expiration: 1000n, organizer: new Uint8Array(32), isActive: true }),
+  },
+  issuers: { member: () => false },
+});
+
 const render = (service, ctx = CTX, dispatch = jest.fn()) =>
   renderWithProviders(<ReviewCredentialUpdate />, {
     drawerValue: {
@@ -176,5 +187,27 @@ describe('ReviewCredentialUpdate wizard', () => {
     await userEvent.click(screen.getByRole('button', { name: /issue updated credential/i }));
     await waitFor(() => expect(service.mintTo).toHaveBeenCalled());
     await waitFor(() => expect(getReissueRecord(EVENT.eventId, 5)).toBeNull());
+  });
+
+  it("won't revoke when the event can no longer take a new credential", async () => {
+    const service = serviceMock();
+    service.getState.mockResolvedValue({ ledger: expiredLedger() });
+    render(service);
+    expect(await screen.findByText(/this event has expired/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /re-issue/i })).toBeDisabled();
+    expect(service.burn).not.toHaveBeenCalled();
+  });
+
+  it('checks again right before revoking and stops if the event expired meanwhile', async () => {
+    const service = serviceMock();
+    render(service);
+    await screen.findByText(/match this credential on-chain/i);
+    await userEvent.click(screen.getByRole('button', { name: /re-issue/i }));
+    service.getState.mockResolvedValue({ ledger: expiredLedger() });
+    await userEvent.click(screen.getByRole('button', { name: /revoke and continue/i }));
+
+    expect(await screen.findByText(/this event has expired/i)).toBeInTheDocument();
+    expect(service.burn).not.toHaveBeenCalled();
+    expect(getReissueRecord(EVENT.eventId, 5)).toBeNull();
   });
 });
