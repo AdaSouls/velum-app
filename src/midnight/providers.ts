@@ -35,6 +35,18 @@ export const NETWORK_ID = process.env.REACT_APP_MIDNIGHT_NETWORK_ID || 'undeploy
 // one (docker compose -f devnet.yml up -d proof-server from ../POAP-Midnight) does allow CORS
 // (verified: OPTIONS /prove reflects Access-Control-Allow-Origin for this dev server's origin).
 const PROOF_SERVER_URL = process.env.REACT_APP_MIDNIGHT_PROOF_SERVER_URL || 'http://localhost:6300';
+// Midnight's indexer (GraphQL). When set, the app reads the chain through this URL instead of the
+// one the wallet reports: Midnight's public indexers were decommissioned on 2026-10-09 (Blockfrost
+// serves them now, behind a project id), and a wallet still configured with the old URL fails
+// every read with a 410 that the browser reports as a CORS error. In production this points at
+// the API host's /midnight/indexer proxy, which adds the project id server-side. The same URL is
+// used by the public verify page (proof-verification.ts). Unset: use the wallet's own.
+const INDEXER_GRAPHQL_URL = process.env.REACT_APP_MIDNIGHT_INDEXER_GRAPHQL_URL;
+// Subscriptions. Defaults to the same URL over ws(s) with /ws appended, which is how both the
+// indexer itself (…/api/v4/graphql/ws) and the proxy (…/midnight/indexer/ws) lay it out.
+const INDEXER_GRAPHQL_WS_URL =
+  process.env.REACT_APP_MIDNIGHT_INDEXER_GRAPHQL_WS_URL ||
+  (INDEXER_GRAPHQL_URL ? `${INDEXER_GRAPHQL_URL.replace(/^http/, 'ws').replace(/\/$/, '')}/ws` : undefined);
 const WALLET_POLL_INTERVAL_MS = 100;
 const WALLET_DISCOVERY_TIMEOUT_MS = 5_000;
 const WALLET_ENABLE_TIMEOUT_MS = 30_000;
@@ -299,7 +311,10 @@ export async function buildProviders(connection: WalletConnection) {
     privateStoragePasswordProvider: () => getStoragePassword(),
     accountId: shieldedAddress.shieldedAddress,
   });
-  const rawPublicDataProvider = indexerPublicDataProvider(config.indexerUri, config.indexerWsUri);
+  const rawPublicDataProvider = indexerPublicDataProvider(
+    INDEXER_GRAPHQL_URL || config.indexerUri,
+    INDEXER_GRAPHQL_WS_URL || config.indexerWsUri,
+  );
   const rawProofProvider = httpClientProofProvider(PROOF_SERVER_URL, zkConfigProvider);
 
   return {
