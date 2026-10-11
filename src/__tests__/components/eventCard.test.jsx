@@ -153,6 +153,12 @@ describe('EventCard Component', () => {
     describe('explorer links', () => {
       const CONTRACT = 'ab'.repeat(32);
       const originalAddress = process.env.REACT_APP_MIDNIGHT_CONTRACT_ADDRESS;
+      const originalNetwork = process.env.REACT_APP_MIDNIGHT_NETWORK_ID;
+
+      // The explorer host depends on the network the app was built for; these describe mainnet.
+      beforeEach(() => {
+        process.env.REACT_APP_MIDNIGHT_NETWORK_ID = 'mainnet';
+      });
 
       const openInfoFields = async () => {
         const dispatch = jest.fn();
@@ -169,6 +175,8 @@ describe('EventCard Component', () => {
         // Assigning undefined to a process.env key would store the string "undefined".
         if (originalAddress === undefined) delete process.env.REACT_APP_MIDNIGHT_CONTRACT_ADDRESS;
         else process.env.REACT_APP_MIDNIGHT_CONTRACT_ADDRESS = originalAddress;
+        if (originalNetwork === undefined) delete process.env.REACT_APP_MIDNIGHT_NETWORK_ID;
+        else process.env.REACT_APP_MIDNIGHT_NETWORK_ID = originalNetwork;
       });
 
       it('links Block, Tx and Contract Address to midnightexplorer.com', async () => {

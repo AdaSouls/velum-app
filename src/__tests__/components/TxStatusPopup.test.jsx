@@ -79,6 +79,40 @@ describe('TxStatusPopup', () => {
     expect(screen.queryByRole('status')).not.toBeInTheDocument();
   });
 
+  it('links a confirmed transaction to the explorer of the network the app runs on', () => {
+    const originalNetwork = process.env.REACT_APP_MIDNIGHT_NETWORK_ID;
+    process.env.REACT_APP_MIDNIGHT_NETWORK_ID = 'preprod';
+    const hash = 'ab'.repeat(32);
+    try {
+      render(<TxStatusPopup />);
+      act(() => pushProgressStep('Creating Event', 'Preparing transaction…'));
+      act(() => {
+        finishProgress({ kind: 'success', title: 'Event Created Successfully', message: `Transaction: ${hash}` });
+      });
+      advance(MIN_RUNNING_MS + DONE_MS + SHIFT_MS);
+
+      const link = screen.getByRole('link', { name: /view on midnight explorer/i });
+      expect(link).toHaveAttribute('href', `https://preprod.midnightexplorer.com/transactions/${hash}`);
+      expect(link).toHaveAttribute('target', '_blank');
+    } finally {
+      if (originalNetwork === undefined) delete process.env.REACT_APP_MIDNIGHT_NETWORK_ID;
+      else process.env.REACT_APP_MIDNIGHT_NETWORK_ID = originalNetwork;
+    }
+  });
+
+  it('shows no explorer link for a failed transaction or on a local devnet', () => {
+    const hash = 'ab'.repeat(32);
+    render(<TxStatusPopup />);
+    act(() => pushProgressStep('Creating Event', 'Preparing transaction…'));
+    act(() => {
+      finishProgress({ kind: 'success', title: 'Event Created Successfully', message: `Transaction: ${hash}` });
+    });
+    advance(MIN_RUNNING_MS + DONE_MS + SHIFT_MS);
+
+    expect(screen.getByText('Event Created Successfully')).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /view on midnight explorer/i })).not.toBeInTheDocument();
+  });
+
   it('cuts straight to the error without marking the failed step as done', () => {
     render(<TxStatusPopup />);
     act(() => pushProgressStep('Minting POAP', 'Preparing transaction…'));

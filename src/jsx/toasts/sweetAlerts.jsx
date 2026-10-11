@@ -2,6 +2,7 @@ import Swal from "sweetalert2";
 import withReactContent from "sweetalert2-react-content";
 import { CheckCircle2 } from "lucide-react";
 import { finishProgress, pushProgressStep } from "../../midnight/tx-status";
+import { explorerTxUrlInText } from "../../utils/midnightExplorer";
 
 const MySwal = withReactContent(Swal);
 
@@ -33,10 +34,14 @@ const successTitle = (text) => (
 
 export const succesfullBlockchainCreation = (title, message, link) => {
   if (finishProgress({ kind: "success", title, message })) return;
+  // Callers pass "" as link; the transaction in the message is what gets linked.
+  const explorerLink = link || explorerTxUrlInText(message);
   MySwal.fire({
     ...GLASS_ALERT_OPTIONS,
     title: successTitle(title),
-    html: `${message}<br><a href="${link}" target="_blank" style="font-size:0.75em; text-decoration: underline;">See on explorer</a>`,
+    html: explorerLink
+      ? `${message}<br><a href="${explorerLink}" target="_blank" rel="noopener noreferrer" style="font-size:0.75em; text-decoration: underline;">View on Midnight Explorer</a>`
+      : message,
     didOpen: () => {
       let child = MySwal.getContainer().querySelector(".swal2-title");
       let parent = child.parentElement;
