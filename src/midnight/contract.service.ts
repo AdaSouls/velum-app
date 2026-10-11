@@ -2,7 +2,7 @@ import { CompiledContract } from '@midnight-ntwrk/midnight-js-protocol/compact-j
 import type { ContractAddress } from '@midnight-ntwrk/ledger-v8';
 import { findDeployedContract, type FoundContract } from '@midnight-ntwrk/midnight-js-contracts';
 import type { InitialAPI } from '@midnight-ntwrk/dapp-connector-api';
-import { combineLatest, firstValueFrom, from, map, type Observable } from 'rxjs';
+import { combineLatest, from, map, type Observable } from 'rxjs';
 import { Contract, ledger as ledgerOf, pureCircuits } from './contract/managed/poap/contract/index.js';
 import type { Ledger } from './contract/managed/poap/contract/index.js';
 import {
@@ -164,9 +164,18 @@ export class PoapContractService {
     ]).pipe(map(([ledger, privateState]) => ({ ledger, privateState })));
   }
 
-  /** One-shot snapshot of state$, for callers that just need a single read (e.g. role checks). */
+  /**
+   * One-shot snapshot, for callers that just need a single read (e.g. role checks). A plain query
+   * for the latest state, not the first value of state$: that opens a new subscription per call,
+   * which the indexer takes seconds to start answering.
+   */
   async getState(): Promise<PoapState> {
-    return firstValueFrom(this.state$);
+    const [contractState, privateState] = await Promise.all([
+      this.providers.publicDataProvider.queryContractState(this.contractAddress),
+      this.providers.privateStateProvider.get(POAP_PRIVATE_STATE_KEY) as Promise<PoapPrivateState>,
+    ]);
+    if (!contractState) throw new Error(`Contract ${this.contractAddress} was not found on the indexer.`);
+    return { ledger: ledgerOf(contractState.data), privateState };
   }
 
   // getCallerPk *is* an exported circuit, but the compiler leaves it out of provableCircuits

@@ -23,6 +23,12 @@ jest.mock('../../midnight/holder-proofs', () => ({
 
 
 describe('PoapCard Component', () => {
+  let restoreNetwork = () => {};
+  afterEach(() => {
+    restoreNetwork();
+    restoreNetwork = () => {};
+  });
+
   const mockPoap = {
     issuerPkHex: 'aa'.repeat(32),
     tokenId: 1,
@@ -143,6 +149,13 @@ describe('PoapCard Component', () => {
     });
 
     it('shows the on-chain mint transaction as verified proof, and dispatches it as a copyable field via View Info', async () => {
+      // The explorer host depends on the network the app was built for.
+      const originalNetwork = process.env.REACT_APP_MIDNIGHT_NETWORK_ID;
+      process.env.REACT_APP_MIDNIGHT_NETWORK_ID = 'mainnet';
+      restoreNetwork = () => {
+        if (originalNetwork === undefined) delete process.env.REACT_APP_MIDNIGHT_NETWORK_ID;
+        else process.env.REACT_APP_MIDNIGHT_NETWORK_ID = originalNetwork;
+      };
       const dispatch = jest.fn();
       renderWithProviders(<PoapCard poap={poap} isExpanded />, { drawerValue, drawerDispatch: dispatch });
       expect(screen.getByText('Verified')).toBeInTheDocument();

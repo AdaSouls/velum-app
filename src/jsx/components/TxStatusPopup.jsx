@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
-import { CheckCircle2, XCircle, X } from "lucide-react";
+import { CheckCircle2, ExternalLink, XCircle, X } from "lucide-react";
 import { closeProgress, subscribeProgress } from "../../midnight/tx-status";
+import { explorerTxUrlInText } from "../../utils/midnightExplorer";
 import loadingGif from "../../images/loading.gif";
 
 // The single progress popup for create/claim/mint/publish flows — all the sequencing (one step at
@@ -46,6 +47,16 @@ export default function TxStatusPopup() {
             )}
             <h4 className="tx-status-title">{result.title}</h4>
             {result.message && <p className="tx-status-result-message">{result.message}</p>}
+            {result.kind === "success" && explorerTxUrlInText(result.message) && (
+              <a
+                className="tx-status-result-link"
+                href={explorerTxUrlInText(result.message)}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                View on Midnight Explorer <ExternalLink size={13} />
+              </a>
+            )}
           </div>
         ) : (
           <>
