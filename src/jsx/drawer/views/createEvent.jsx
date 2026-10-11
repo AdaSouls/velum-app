@@ -259,20 +259,6 @@ export default function CreateEvent() {
       return;
     }
 
-    // createEvent reverts with "Issuer is deactivated" once the admin has blocked this key (any
-    // key can be blocked, registered or not). Checked against the live ledger before the IPFS
-    // uploads, so a blocked organizer isn't left with orphaned pins and a failed transaction.
-    try {
-      const { ledger } = await provider.service.getState();
-      const callerPk = Uint8Array.from(Buffer.from(provider.address, "hex"));
-      if (ledger.issuers.member(callerPk) && !ledger.issuers.lookup(callerPk).isActive) {
-        errorFunction("Organizer Blocked", "An admin has blocked this wallet from creating events.", "");
-        return;
-      }
-    } catch (stateError) {
-      console.warn("Could not check issuer status before creating the event:", stateError);
-    }
-
     if (!categoryConfig) {
       errorFunction("Validation Error", "Choose what you're creating first.", "");
       return;
@@ -288,8 +274,25 @@ export default function CreateEvent() {
       return;
     }
 
+    // From here on the button is disabled and the progress popup is up: the first step below is a
+    // read from the chain, which can take seconds, and used to run with nothing on screen.
     setLoading(true);
     try {
+      // createEvent reverts with "Issuer is deactivated" once the admin has blocked this key (any
+      // key can be blocked, registered or not). Checked against the live ledger before the IPFS
+      // uploads, so a blocked organizer isn't left with orphaned pins and a failed transaction.
+      loadingFunction("Creating Event", "Checking your organizer status…", "");
+      try {
+        const { ledger } = await provider.service.getState();
+        const callerPk = Uint8Array.from(Buffer.from(provider.address, "hex"));
+        if (ledger.issuers.member(callerPk) && !ledger.issuers.lookup(callerPk).isActive) {
+          errorFunction("Organizer Blocked", "An admin has blocked this wallet from creating events.", "");
+          return;
+        }
+      } catch (stateError) {
+        console.warn("Could not check issuer status before creating the event:", stateError);
+      }
+
       let imageUri;
       if (preparedImageBlob) {
         loadingFunction("Creating Event", "Uploading image to IPFS…", "");

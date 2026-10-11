@@ -455,6 +455,26 @@ describe('CreateEvent drawer view', () => {
     expect(screen.getByRole('button', { name: /^create$/i })).toBeInTheDocument();
   });
 
+  it('shows it is working as soon as Create is clicked, while the organizer check is still reading the chain', async () => {
+    const createEvent = jest.fn().mockResolvedValue({ txHash: '0xabc' });
+    let resolveState;
+    const getState = jest.fn(() => new Promise((resolve) => { resolveState = resolve; }));
+    const drawerValue = buildDrawerValue(createEvent);
+    drawerValue.midnight.provider.service.getState = getState;
+    renderWithProviders(<CreateEvent />, { drawerValue });
+
+    await fillThroughToSubmit({ categoryLabel: 'Event', name: 'DevCon', maxSupply: '10' });
+
+    // The chain read has not answered yet: the button already says so and cannot be clicked twice.
+    await waitFor(() => expect(getState).toHaveBeenCalled());
+    expect(screen.getByRole('button', { name: /creating…/i })).toBeDisabled();
+    expect(uploadJSONToIPFS).not.toHaveBeenCalled();
+    expect(createEvent).not.toHaveBeenCalled();
+
+    resolveState({ ledger: { issuers: { member: () => false } } });
+    await waitFor(() => expect(createEvent).toHaveBeenCalledTimes(1));
+  });
+
   it('shows an error and does not call the service when submitting without a connected wallet', async () => {
     const createEvent = jest.fn();
     const drawerValue = buildDrawerValue(createEvent);
