@@ -1,4 +1,8 @@
-import { uploadImageToIPFS, uploadJSONToIPFS } from '../../services/ipfs.service';
+// ipfs.service reads REACT_APP_IPFS_API_URL once, when the module loads, and falls back to the
+// local proxy when it's unset. These tests are about that fallback, so the module is loaded with
+// the variable cleared instead of with whatever an env file (e.g. .env.test.local) put there.
+let uploadImageToIPFS: typeof import('../../services/ipfs.service').uploadImageToIPFS;
+let uploadJSONToIPFS: typeof import('../../services/ipfs.service').uploadJSONToIPFS;
 
 function jsonResponse(body: unknown, ok = true, statusText = 'Error') {
   return { ok, statusText, json: jest.fn().mockResolvedValue(body) };
@@ -6,6 +10,20 @@ function jsonResponse(body: unknown, ok = true, statusText = 'Error') {
 
 describe('ipfs.service', () => {
   const originalFetch = global.fetch;
+  const originalApiUrl = process.env.REACT_APP_IPFS_API_URL;
+
+  beforeAll(() => {
+    delete process.env.REACT_APP_IPFS_API_URL;
+    jest.isolateModules(() => {
+      ({ uploadImageToIPFS, uploadJSONToIPFS } = require('../../services/ipfs.service'));
+    });
+  });
+
+  afterAll(() => {
+    // Assigning undefined to a process.env key would store the string "undefined".
+    if (originalApiUrl === undefined) delete process.env.REACT_APP_IPFS_API_URL;
+    else process.env.REACT_APP_IPFS_API_URL = originalApiUrl;
+  });
 
   afterEach(() => {
     global.fetch = originalFetch as typeof global.fetch;
