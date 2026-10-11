@@ -63,6 +63,29 @@ describe('EventCard Component', () => {
     expect(screen.queryByText('A great event')).not.toBeInTheDocument();
   });
 
+  // The organizer's expanded card (variant="manage") previews what a subscriber gets.
+  it('explains the preview only for an event that has a description', async () => {
+    const subtitle = /what subscribers receive by claiming this event/i;
+
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      json: jest.fn().mockResolvedValue({ name: 'With Description', description: 'A great event' }),
+    });
+    const described = { ...mockEvent, metadataURI: 'https://example.com/meta-manage-described.json' };
+    const { unmount } = renderWithProviders(<EventCard event={described} variant="manage" isExpanded />);
+    expect(await screen.findByText(subtitle)).toBeInTheDocument();
+    unmount();
+
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      json: jest.fn().mockResolvedValue({ name: 'No Description' }),
+    });
+    const bare = { ...mockEvent, metadataURI: 'https://example.com/meta-manage-bare.json' };
+    renderWithProviders(<EventCard event={bare} variant="manage" isExpanded />);
+    await screen.findAllByText('No Description');
+    expect(screen.queryByText(subtitle)).not.toBeInTheDocument();
+  });
+
   it('shows the fetched description in the expanded details', async () => {
     global.fetch = jest.fn().mockResolvedValue({
       ok: true,

@@ -787,7 +787,9 @@ const EventCard = forwardRef(({
                         broken={showBrokenImage}
                         imageUrl={metadata?.poapImageUrl || metadata?.imageUrl}
                         title={metadata?.name || "This event's POAP"}
-                        subtitle="What subscribers receive by claiming this event."
+                        // Only next to a description: on an event without one this line was
+                        // the only text in the card and read as if it were the description.
+                        subtitle={metadata?.description ? "What subscribers receive by claiming this event." : undefined}
                       />
 
                       <div className="d-flex justify-content-end mt-3">
