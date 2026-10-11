@@ -13,6 +13,13 @@ describe('MyEvents page', () => {
     { eventId: 'cc'.repeat(32), issuerPk: 'dd'.repeat(32), maxSupply: 0, minted: 2, expiration: 0, isActive: true, isPublicMint: true, createdBlock: 2 },
   ];
 
+  // The wallet that organized mockEvents[0] (issuerPk 'bb'…) — My Events only ever lists the
+  // connected wallet's own events (see myEvents.jsx's ownEvents).
+  const organizerDrawerValue = {
+    ...mockDrawerContext,
+    midnight: { ...mockDrawerContext.midnight, provider: { address: 'bb'.repeat(32) } },
+  };
+
   beforeEach(() => {
     jest.clearAllMocks();
     getAllEvents.mockResolvedValue(mockEvents);
@@ -42,7 +49,7 @@ describe('MyEvents page', () => {
   });
 
   it('loads and displays events', async () => {
-    renderWithProviders(<EventsPage />);
+    renderWithProviders(<EventsPage />, { drawerValue: organizerDrawerValue });
 
     await waitFor(() => {
       expect(getAllEvents).toHaveBeenCalled();
@@ -50,6 +57,20 @@ describe('MyEvents page', () => {
     await waitFor(() => {
       expect(screen.getAllByText(/Event aaaaaaaa/i).length).toBeGreaterThan(0);
     });
+  });
+
+  it('lists no events while no wallet is connected', async () => {
+    renderWithProviders(<EventsPage />);
+
+    await waitFor(() => {
+      expect(getAllEvents).toHaveBeenCalled();
+    });
+    await waitFor(() => {
+      expect(screen.queryByAltText(/loading events/i)).not.toBeInTheDocument();
+    });
+    expect(screen.queryByText(/Event aaaaaaaa/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Event cccccccc/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/^0 Events$/i)).toBeInTheDocument();
   });
 
   it('dispatches CREATE_EVENT when create button is clicked by a connected wallet', async () => {
@@ -83,25 +104,25 @@ describe('MyEvents page', () => {
     expect(dispatch).toHaveBeenCalledWith({ type: 'CREATE_EVENT' });
   });
 
+  // Other organizers' events are left out entirely, not listed after the wallet's own — event
+  // discovery lives on /search.
   it('separates my events from other events for a connected organizer', async () => {
-    const drawerValue = {
-      ...mockDrawerContext,
-      midnight: { ...mockDrawerContext.midnight, provider: { address: 'bb'.repeat(32) } },
-    };
-
-    renderWithProviders(<EventsPage />, { drawerValue });
+    renderWithProviders(<EventsPage />, { drawerValue: organizerDrawerValue });
 
     await waitFor(() => {
       expect(getAllEvents).toHaveBeenCalled();
     });
     await waitFor(() => {
       expect(screen.getAllByText(/Event aaaaaaaa/i).length).toBeGreaterThan(0);
-      expect(screen.getAllByText(/Event cccccccc/i).length).toBeGreaterThan(0);
     });
+    expect(screen.queryByText(/Event cccccccc/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/^1 Event$/i)).toBeInTheDocument();
   });
 
   it('hides sibling cards while one is expanded, and brings them back after it collapses', async () => {
-    renderWithProviders(<EventsPage />);
+    // Both events have to belong to the connected wallet to be siblings in its grid.
+    getAllEvents.mockResolvedValue(mockEvents.map((event) => ({ ...event, issuerPk: 'bb'.repeat(32) })));
+    renderWithProviders(<EventsPage />, { drawerValue: organizerDrawerValue });
 
     await waitFor(() => {
       expect(screen.getAllByText(/Event aaaaaaaa/i).length).toBeGreaterThan(0);
@@ -117,8 +138,12 @@ describe('MyEvents page', () => {
       expect(screen.getByRole('button', { name: /collapse event details/i })).toBeInTheDocument();
     }, { timeout: 2000 });
     // The sibling is left out of the grid entirely while one card is expanded — only the expanded
-    // card itself remains, full width (see myEvents.jsx's visibleEvents).
-    expect(screen.queryByText(/Event cccccccc/i)).not.toBeInTheDocument();
+    // card itself remains, full width (see myEvents.jsx's visibleEvents). Its AnimatePresence exit
+    // animation (0.2s) may still be finishing right after expandedId updates, so this waits for it
+    // rather than asserting immediately (same as exploreEvents.test.jsx).
+    await waitFor(() => {
+      expect(screen.queryByText(/Event cccccccc/i)).not.toBeInTheDocument();
+    }, { timeout: 2000 });
     expect(screen.getAllByText(/Event aaaaaaaa/i).length).toBeGreaterThan(0);
 
     await userEvent.click(screen.getByRole('button', { name: /collapse event details/i }));
