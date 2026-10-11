@@ -11,6 +11,9 @@ const FilterPopover = ({ hasActiveFilters, children }) => {
   const [pos, setPos] = useState(null);
   const btnRef = useRef(null);
   const popRef = useRef(null);
+  // True for the duration of one mousedown that started inside the popover's React subtree — see
+  // the popover's own onMouseDown below.
+  const pressedInsideRef = useRef(false);
 
   const openPopover = () => {
     const rect = btnRef.current.getBoundingClientRect();
@@ -25,6 +28,10 @@ const FilterPopover = ({ hasActiveFilters, children }) => {
     if (!open) return undefined;
 
     const handleClickOutside = (event) => {
+      if (pressedInsideRef.current) {
+        pressedInsideRef.current = false;
+        return;
+      }
       if (
         btnRef.current && !btnRef.current.contains(event.target) &&
         popRef.current && !popRef.current.contains(event.target)
@@ -57,7 +64,18 @@ const FilterPopover = ({ hasActiveFilters, children }) => {
         <Filter size={15} />
       </button>
       {open && pos && createPortal(
-        <div className="filter-popover" ref={popRef} style={{ top: pos.top, right: pos.right }}>
+        // popRef.contains() alone misses a child that portals its own panel out to <body> — a
+        // SelectDropdown's option list (Status / Sort By / Order in EventFilters.jsx) is not a DOM
+        // descendant of this div, so pressing an option counted as a click outside, closed the
+        // popover on mousedown and unmounted the option before its click ever fired. React events
+        // do bubble through portals along the component tree, and reach this handler before the
+        // native document listener above runs, so it marks those presses as inside.
+        <div
+          className="filter-popover"
+          ref={popRef}
+          style={{ top: pos.top, right: pos.right }}
+          onMouseDown={() => { pressedInsideRef.current = true; }}
+        >
           {children}
         </div>,
         document.body

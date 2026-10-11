@@ -147,21 +147,50 @@ describe('EventCard Component', () => {
       });
     });
 
-    it('links Block, Tx and Contract Address to midnightexplorer.com', async () => {
-      const dispatch = jest.fn();
-      const event = { ...mockEvent, createdTx: 'dd'.repeat(32) };
-      renderWithProviders(<EventCard event={event} isExpanded />, { drawerDispatch: dispatch });
+    // The contract address is a build-time setting (REACT_APP_MIDNIGHT_CONTRACT_ADDRESS, read when
+    // the popup opens), not part of any event — these tests set it themselves instead of relying on
+    // whichever env file happens to be loaded.
+    describe('explorer links', () => {
+      const CONTRACT = 'ab'.repeat(32);
+      const originalAddress = process.env.REACT_APP_MIDNIGHT_CONTRACT_ADDRESS;
 
-      await userEvent.click(screen.getByRole('button', { name: /^view info$/i }));
+      const openInfoFields = async () => {
+        const dispatch = jest.fn();
+        const event = { ...mockEvent, createdTx: 'dd'.repeat(32) };
+        renderWithProviders(<EventCard event={event} isExpanded />, { drawerDispatch: dispatch });
 
-      const { fields } = dispatch.mock.calls.find(([a]) => a.type === 'SHOW_BLOCKCHAIN_INFO')[0].payload;
-      const byKey = Object.fromEntries(fields.map((f) => [f.key, f]));
-      expect(byKey.block.href).toBe('https://www.midnightexplorer.com/blocks/42');
-      expect(byKey.tx.href).toBe(`https://www.midnightexplorer.com/transactions/${'dd'.repeat(32)}`);
-      expect(byKey.contractAddress.href).toBe(
-        `https://www.midnightexplorer.com/contracts/${process.env.REACT_APP_MIDNIGHT_CONTRACT_ADDRESS}`,
-      );
-      expect(byKey.eventId.href).toBeUndefined();
+        await userEvent.click(screen.getByRole('button', { name: /^view info$/i }));
+
+        const { fields } = dispatch.mock.calls.find(([a]) => a.type === 'SHOW_BLOCKCHAIN_INFO')[0].payload;
+        return Object.fromEntries(fields.map((f) => [f.key, f]));
+      };
+
+      afterEach(() => {
+        // Assigning undefined to a process.env key would store the string "undefined".
+        if (originalAddress === undefined) delete process.env.REACT_APP_MIDNIGHT_CONTRACT_ADDRESS;
+        else process.env.REACT_APP_MIDNIGHT_CONTRACT_ADDRESS = originalAddress;
+      });
+
+      it('links Block, Tx and Contract Address to midnightexplorer.com', async () => {
+        process.env.REACT_APP_MIDNIGHT_CONTRACT_ADDRESS = CONTRACT;
+
+        const byKey = await openInfoFields();
+
+        expect(byKey.block.href).toBe('https://www.midnightexplorer.com/blocks/42');
+        expect(byKey.tx.href).toBe(`https://www.midnightexplorer.com/transactions/${'dd'.repeat(32)}`);
+        expect(byKey.contractAddress.value).toBe(CONTRACT);
+        expect(byKey.contractAddress.href).toBe(`https://www.midnightexplorer.com/contracts/${CONTRACT}`);
+        expect(byKey.eventId.href).toBeUndefined();
+      });
+
+      it('leaves Contract Address unlinked when no contract address is configured', async () => {
+        delete process.env.REACT_APP_MIDNIGHT_CONTRACT_ADDRESS;
+
+        const byKey = await openInfoFields();
+
+        expect(byKey.contractAddress.href).toBeUndefined();
+        expect(byKey.block.href).toBe('https://www.midnightexplorer.com/blocks/42');
+      });
     });
 
     // The organizer-key copy badge (hint + copy button) is only for the organizer of a Credential —

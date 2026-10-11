@@ -40,10 +40,29 @@ describe('My Events Flow Integration', () => {
     expect(dispatch).toHaveBeenCalledWith({ type: 'CREATE_EVENT' });
   });
 
+  // The badge counts the connected organizer's own events, not everything the indexer returns —
+  // My Events is a strict "mine only" list (see myEvents.jsx's ownEvents).
   it('shows the correct event count badge once events load', async () => {
+    getAllEvents.mockResolvedValue([
+      ...mockEvents,
+      { eventId: 'ee'.repeat(32), issuerPk: 'bb'.repeat(32), maxSupply: 10, minted: 0, expiration: 0, isActive: true, isPublicMint: true, createdBlock: 3 },
+    ]);
+    const drawerValue = {
+      ...mockDrawerContext,
+      midnight: { ...mockDrawerContext.midnight, provider: { address: 'bb'.repeat(32) } },
+    };
+
+    renderWithProviders(<EventsPage />, { drawerValue });
+
+    await waitFor(() => expect(getAllEvents).toHaveBeenCalled());
+    await waitFor(() => expect(screen.getByText(/^2 Events$/i)).toBeInTheDocument());
+  });
+
+  it('counts no events while no wallet is connected', async () => {
     renderWithProviders(<EventsPage />);
 
     await waitFor(() => expect(getAllEvents).toHaveBeenCalled());
-    await waitFor(() => expect(screen.getByText(/2 Events/i)).toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByAltText(/loading events/i)).not.toBeInTheDocument());
+    expect(screen.getByText(/^0 Events$/i)).toBeInTheDocument();
   });
 });

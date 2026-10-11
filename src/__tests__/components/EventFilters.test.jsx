@@ -49,6 +49,23 @@ describe('EventFilters Component', () => {
     expect(mockOnFilterChange).toHaveBeenCalledWith(expect.objectContaining({ status: 'active' }));
   });
 
+  // The option list is portalled to <body>, outside the popover's own DOM node — picking from it
+  // must not count as a click outside the popover (see FilterPopover.jsx).
+  it('keeps the popover open after picking from a dropdown, and still closes on an outside press', async () => {
+    render(<EventFilters filters={{}} onFilterChange={mockOnFilterChange} onReset={mockOnReset} />);
+
+    await openPopover();
+    await userEvent.click(screen.getByLabelText(/^Sort By$/i));
+    await userEvent.click(screen.getByRole('option', { name: 'Minted' }));
+
+    expect(mockOnFilterChange).toHaveBeenCalledWith(expect.objectContaining({ sortBy: 'minted' }));
+    expect(screen.getByText(/Filters & Sort/i)).toBeInTheDocument();
+
+    await userEvent.click(document.body);
+
+    expect(screen.queryByText(/Filters & Sort/i)).not.toBeInTheDocument();
+  });
+
   it('calls onReset when clear button is clicked', async () => {
     render(
       <EventFilters
