@@ -161,7 +161,7 @@ describe('PublishDisclosureRequest drawer view', () => {
     await fillRecipient();
     await userEvent.click(screen.getByRole('button', { name: /^publish request$/i }));
 
-    expect(await screen.findByText(/Age ≥ 18/)).toBeInTheDocument();
+    expect(await screen.findByText(/Age between 18 and 120/)).toBeInTheDocument();
     expect(publishRequestRule).toHaveBeenCalledWith('ee'.repeat(32), { op: 'gte', type: 'number', min: 18, max: 120 });
     expect(buildMerkleTree.mock.calls[0][0]).toHaveLength(103);
   });

@@ -347,7 +347,7 @@ const Docs = () => {
                     <ul>
                       <li>Text or list: "is one of …"</li>
                       <li>Number: at least, at most, between, or one of</li>
-                      <li>Date: before, after, between, or "at least N years ago" (an age check)</li>
+                      <li>Date: an age for a date of birth ("at least N years old" or "under N years old"), or before, after, between</li>
                     </ul>
                   </li>
                   <li>

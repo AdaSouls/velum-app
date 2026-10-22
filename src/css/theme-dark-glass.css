@@ -1374,6 +1374,16 @@ select option,
   letter-spacing: 0.06em;
 }
 
+.verify-proof-revoked-badge {
+  background: transparent;
+  border: 1px solid #f1b44c;
+  color: #f1b44c;
+  font-size: 11px;
+  padding: 3px 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
 .verify-proof-facts {
   padding: 16px 18px;
   border-radius: 12px;

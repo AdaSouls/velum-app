@@ -5,7 +5,7 @@ import Layout from "../layout/layout";
 import { blockTimestamp, lookupProofTransaction, parseProofHashes, PROOF_KINDS } from "../../midnight/proof-verification";
 import { describeValidity, formatUntil, parseValidity, validityStatus } from "../../midnight/validity";
 import { decodeProofDetails, isZeroHex } from "../../midnight/proof-transcript";
-import { getEvent, getToken } from "../../midnight/indexer.service";
+import { getEvent, getToken, getTokensByEvent } from "../../midnight/indexer.service";
 import { fetchMetadata } from "../hooks/useEventMetadata";
 import { describeRule, isIdentityField } from "../../midnight/attribute-types";
 import { documentLabel } from "../../midnight/identity";
@@ -64,10 +64,28 @@ async function describeCondition(entryPoint, details, { fieldId, setRoot }, fiel
   return { label: field?.label || null, rule };
 }
 
-async function loadProofContext(entryPoint, details, proofTimestamp) {
+// The credential a private-detail proof was answered from. The proof doesn't name the token, but
+// its request is addressed to one holder of one event: their token that was live at the proof's
+// block. Also the one that replaced it, if it was re-issued since.
+async function findAnsweringToken(details, proofBlock) {
+  if (!details.recipientPk || proofBlock == null) return null;
+  const holder = details.recipientPk.toLowerCase();
+  const tokens = (await getTokensByEvent(details.eventId)).filter((t) => t.ownerPk?.toLowerCase() === holder);
+  const token = tokens.find(
+    (t) => (t.mintedBlock == null || t.mintedBlock <= proofBlock) && (t.burnedBlock == null || t.burnedBlock > proofBlock),
+  );
+  if (!token) return null;
+  const replacement = token.isBurned ? tokens.find((t) => !t.isBurned && t.replacesTokenId === token.tokenId) : null;
+  return { ...token, replacedBy: replacement?.tokenId ?? null };
+}
+
+async function loadProofContext(entryPoint, details, proofTimestamp, proofBlock) {
   const event = await getEvent(details.eventId).catch(() => null);
   const metadata = event?.metadataURI ? await fetchMetadata(event.metadataURI) : null;
-  const token = details.tokenId !== null ? await getToken(details.tokenId).catch(() => null) : null;
+  const token =
+    details.tokenId !== null
+      ? await getToken(details.tokenId).catch(() => null)
+      : await findAnsweringToken(details, proofBlock).catch(() => null);
 
   const fields =
     entryPoint === "proveAttributeMembership" || entryPoint === "proveAttributeMembershipOnce"
@@ -112,7 +130,7 @@ function ProofSection({ hash, contractAddress }) {
         }
         setDetails(decoded);
         // Context only puts names on the proof; a failed lookup doesn't make it invalid.
-        const loaded = await loadProofContext(found.entryPoint, decoded, found.timestamp).catch((contextError) => {
+        const loaded = await loadProofContext(found.entryPoint, decoded, found.timestamp, found.blockHeight).catch((contextError) => {
           console.error("Could not load the proof's context:", contextError);
           return null;
         });
@@ -140,6 +158,8 @@ function ProofSection({ hash, contractAddress }) {
   const validityInfo = context?.validityInfo;
   const validityNow = validityInfo ? validityStatus(validityInfo.validity, validityInfo.fromMs) : null;
   const found = result?.status === "found";
+  const revoked = valid && Boolean(token?.isBurned);
+  const anonymous = result?.entryPoint === "proveEventAttendance";
 
   return (
     <>
@@ -160,7 +180,12 @@ function ProofSection({ hash, contractAddress }) {
                     ? "Not a proof"
                     : "Not a Velum POAP transaction"}
             </p>
-            {valid && <span className="badge verify-proof-valid-badge">Valid proof</span>}
+            {valid && (
+              <div className="d-flex flex-wrap justify-content-center" style={{ gap: "6px" }}>
+                <span className="badge verify-proof-valid-badge">Valid proof</span>
+                {revoked && <span className="badge verify-proof-revoked-badge">Credential revoked</span>}
+              </div>
+            )}
             <p className="m-0 text-muted">
               {valid
                 ? kind.description
@@ -200,14 +225,15 @@ function ProofSection({ hash, contractAddress }) {
                     </span>
                   ))}
                 </dd>
-                {details.tokenId !== null && (
+                {(details.tokenId !== null || token) && (
                   <>
                     <dt>Token</dt>
                     <dd>
-                      #{String(details.tokenId)}
+                      #{String(details.tokenId ?? token.tokenId)}
                       {token && (
                         <span className={token.isBurned ? "text-warning" : "text-muted"}>
                           {token.isBurned ? ` · revoked since block ${token.burnedBlock ?? "N/A"}` : " · still held today"}
+                          {token.replacedBy != null && ` · re-issued as #${token.replacedBy}`}
                         </span>
                       )}
                     </dd>
@@ -275,10 +301,19 @@ function ProofSection({ hash, contractAddress }) {
             <dd title={contractAddress}>{truncateHex(contractAddress)}</dd>
           </dl>
 
+          {revoked && (
+            <div className="alert alert-warning m-0" role="alert">
+              The organizer revoked this credential after the proof was made
+              {token.burnedBlock != null ? ` (block ${token.burnedBlock})` : ""}. The proof was true when it
+              was made, but it no longer stands for a valid credential.
+              {token.replacedBy != null && ` It was re-issued as #${token.replacedBy}: ask for a new proof.`}
+            </div>
+          )}
           {valid && (
             <p className="text-muted small m-0 text-center">
-              A proof only reaches the chain if it's correct, so a confirmed transaction is the proof. It
-              shows the holder had this POAP at that moment; ask for a new proof to check they still do.
+              {anonymous
+                ? "This proof is anonymous, so this page can't tell whether that POAP was revoked later. It only shows the holder had a valid one at that moment: ask for a new proof to check they still do."
+                : "A proof only reaches the chain if it's correct, so a confirmed transaction is the proof. It shows the holder had this POAP at that moment; ask for a new proof to check they still do."}
             </p>
           )}
         </>
