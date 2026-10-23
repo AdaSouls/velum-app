@@ -95,7 +95,7 @@ export type Rule =
   // asker and the holder can compute, so nothing about it is published but the kind of question.
   | { op: 'identity' }
   | { op: 'gte' | 'lte' | 'between'; type: 'number'; min: number; max: number }
-  | { op: 'onOrAfter' | 'onOrBefore' | 'between'; type: 'date'; from: string; to: string; preset?: ValidityPreset };
+  | { op: 'onOrAfter' | 'onOrBefore' | 'between'; type: 'date'; from: string; to: string; preset?: DatePreset };
 
 // Plain-language questions about a credential's "Valid until" date (validity.ts), for verifiers:
 // "is it still valid?", "has it expired?", "does it expire within 6 months?", "is it valid for at
@@ -107,6 +107,15 @@ export type ValidityPresetKind = (typeof VALIDITY_PRESETS)[number];
 export type ValidityPreset = { kind: ValidityPresetKind; asOf: string; months?: number };
 // Choices offered for "expires within" / "valid for at least".
 export const VALIDITY_PERIOD_MONTHS = [3, 6, 12, 24] as const;
+// Age questions about a date of birth: "at least 18 years old", "under 18". Also ordinary date
+// ranges anchored on the day they were asked (asOf), checked the same way as the validity presets.
+export const AGE_PRESETS = ['ageAtLeast', 'ageUnder'] as const;
+export type AgePresetKind = (typeof AGE_PRESETS)[number];
+export type AgePreset = { kind: AgePresetKind; asOf: string; years: number };
+export type DatePreset = ValidityPreset | AgePreset;
+export const MAX_AGE_YEARS = 150;
+const isAgePreset = (preset: DatePreset): preset is AgePreset =>
+  (AGE_PRESETS as readonly string[]).includes(preset.kind);
 // How far a "still valid" range reaches ahead, and an "expired" one back.
 const VALIDITY_SPAN_YEARS = 30;
 
@@ -173,26 +182,33 @@ const formatDate = (iso: string) => {
 // The question in words, as the holder and the verifier see it.
 export function describeRule(label: string, rule: Rule): string {
   if (rule.op !== 'identity' && rule.op !== 'oneOf' && rule.type === 'date' && rule.preset) {
-    return describeValidityPreset(rule.preset);
+    return isAgePreset(rule.preset) ? describeAgePreset(label, rule.preset) : describeValidityPreset(rule.preset);
   }
   switch (rule.op) {
     case 'identity':
       return `${label} matches the document checked`;
     case 'oneOf':
       return `${label} is one of: ${rule.values.join(', ')}`;
+    // A one-sided question shows only its own end while the other one is the automatic default;
+    // an edited far end is shown too, so nobody is told "≥ 18" when 30 isn't accepted.
     case 'gte':
-      return `${label} ≥ ${rule.min}`;
+      if (rule.max === rule.min + DEFAULT_NUMBER_SPAN) return `${label} ≥ ${rule.min}`;
+      break;
     case 'lte':
-      return `${label} ≤ ${rule.max}`;
+      if (rule.min === rule.max - DEFAULT_NUMBER_SPAN) return `${label} ≤ ${rule.max}`;
+      break;
     case 'onOrAfter':
-      return `${label} on or after ${formatDate(rule.from)}`;
+      if (rule.to === addYears(rule.from, DATE_SPAN_AFTER_YEARS)) return `${label} on or after ${formatDate(rule.from)}`;
+      break;
     case 'onOrBefore':
-      return `${label} on or before ${formatDate(rule.to)}`;
+      if (rule.from === addYears(rule.to, -DATE_SPAN_BEFORE_YEARS)) return `${label} on or before ${formatDate(rule.to)}`;
+      break;
     default:
-      return rule.type === 'number'
-        ? `${label} between ${rule.min} and ${rule.max}`
-        : `${label} between ${formatDate(rule.from)} and ${formatDate(rule.to)}`;
+      break;
   }
+  return rule.type === 'number'
+    ? `${label} between ${rule.min} and ${rule.max}`
+    : `${label} between ${formatDate(rule.from)} and ${formatDate(rule.to)}`;
 }
 
 // A rule read back from the server (anyone can post one), or null if it isn't well-formed.
@@ -210,8 +226,12 @@ export function parseRule(raw: unknown): Rule | null {
     rule = { op: r.op, type: 'date', from: String(r.from), to: String(r.to) };
     const preset = parsePreset(r.preset);
     if (preset) {
-      const expected = validityPresetRule(preset.kind, preset.asOf, preset.months);
-      if (expected.op === rule.op && expected.from === rule.from && expected.to === rule.to) rule = expected;
+      const expected = isAgePreset(preset)
+        ? agePresetRule(preset.kind, preset.asOf, preset.years)
+        : validityPresetRule(preset.kind, preset.asOf, preset.months);
+      if (expected.op === rule.op && expected.type === 'date' && expected.from === rule.from && expected.to === rule.to) {
+        rule = expected;
+      }
     }
   }
   return rule && !ruleError(rule) ? rule : null;
@@ -275,6 +295,31 @@ export function validityPresetRule(kind: ValidityPresetKind, asOf: string, month
   }
 }
 
+// ── Age questions ─────────────────────────────────────────────────────────────
+
+// The birth dates behind "at least N years old" / "under N years old", asked on `asOf`:
+//   ageAtLeast — born on or before asOf − N years (their Nth birthday has come), reaching
+//                DATE_SPAN_BEFORE_YEARS further back;
+//   ageUnder   — born after asOf − N years, up to asOf.
+export function agePresetRule(kind: AgePresetKind, asOf: string, years: number): Rule {
+  const preset: AgePreset = { kind, asOf, years };
+  const cutoff = addYears(asOf, -years);
+  return kind === 'ageAtLeast'
+    ? { op: 'onOrBefore', type: 'date', from: addYears(cutoff, -DATE_SPAN_BEFORE_YEARS), to: cutoff, preset }
+    : { op: 'between', type: 'date', from: addDays(cutoff, 1), to: asOf, preset };
+}
+
+// The birth date an age question turns on, for the asker's form.
+export function ageCutoffText(kind: AgePresetKind, asOf: string, years: number): string {
+  const cutoff = formatDate(addYears(asOf, -years));
+  return kind === 'ageAtLeast' ? `born on or before ${cutoff}` : `born after ${cutoff}`;
+}
+
+export function describeAgePreset(label: string, preset: AgePreset): string {
+  const age = preset.kind === 'ageAtLeast' ? `at least ${preset.years} years old` : `under ${preset.years} years old`;
+  return `${label}: ${age} (${ageCutoffText(preset.kind, preset.asOf, preset.years)})`;
+}
+
 export function describePeriod(months: number): string {
   if (months % 12 === 0) return months === 12 ? '1 year' : `${months / 12} years`;
   return months === 1 ? '1 month' : `${months} months`;
@@ -294,9 +339,15 @@ export function describeValidityPreset(preset: ValidityPreset): string {
   }
 }
 
-function parsePreset(raw: unknown): ValidityPreset | null {
+function parsePreset(raw: unknown): DatePreset | null {
   if (!raw || typeof raw !== 'object') return null;
   const p = raw as Record<string, unknown>;
+  if ((AGE_PRESETS as readonly string[]).includes(p.kind as string)) {
+    const years = Number(p.years);
+    if (typeof p.asOf !== 'string' || !isValidDate(p.asOf)) return null;
+    if (!Number.isSafeInteger(years) || years < 1 || years > MAX_AGE_YEARS) return null;
+    return { kind: p.kind as AgePresetKind, asOf: p.asOf, years };
+  }
   if (!(VALIDITY_PRESETS as readonly string[]).includes(p.kind as string)) return null;
   if (typeof p.asOf !== 'string' || !isValidDate(p.asOf)) return null;
   const kind = p.kind as ValidityPresetKind;

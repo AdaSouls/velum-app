@@ -1,5 +1,6 @@
 import {
   addMonths,
+  agePresetRule,
   validityPresetRule,
   addYears,
   canonicalValue,
@@ -88,12 +89,19 @@ describe('attribute-types', () => {
     });
 
     it('describes each question in words', () => {
-      expect(describeRule('Age', { op: 'gte', type: 'number', min: 18, max: 120 })).toBe('Age ≥ 18');
-      expect(describeRule('Age', { op: 'lte', type: 'number', min: 0, max: 65 })).toBe('Age ≤ 65');
+      expect(describeRule('Age', { op: 'gte', type: 'number', min: 18, max: 218 })).toBe('Age ≥ 18');
+      expect(describeRule('Age', { op: 'lte', type: 'number', min: -135, max: 65 })).toBe('Age ≤ 65');
       expect(describeRule('Born', { op: 'onOrBefore', type: 'date', from: '1908-09-24', to: '2008-09-24' })).toBe(
         'Born on or before 24/09/2008',
       );
       expect(describeRule('Sector', { op: 'oneOf', values: ['Campo', 'VIP'] })).toBe('Sector is one of: Campo, VIP');
+    });
+
+    it('shows both ends of a one-sided range whose far end was changed', () => {
+      expect(describeRule('Age', { op: 'gte', type: 'number', min: 18, max: 120 })).toBe('Age between 18 and 120');
+      expect(describeRule('Born', { op: 'onOrBefore', type: 'date', from: '2008-10-22', to: '2008-10-22' })).toBe(
+        'Born between 22/10/2008 and 22/10/2008',
+      );
     });
 
     it('only trusts well-formed rules read back from the server', () => {
@@ -112,6 +120,33 @@ describe('attribute-types', () => {
   it('adds years without landing on a day that does not exist', () => {
     expect(addYears('2008-09-24', -18)).toBe('1990-09-24');
     expect(addYears('2024-02-29', 1)).toBe('2025-02-28');
+  });
+});
+
+describe('age questions about a date of birth', () => {
+  const ON = '2026-10-22';
+
+  it('turns "at least 18" into births on or before the 18th birthday cutoff', () => {
+    const rule = agePresetRule('ageAtLeast', ON, 18);
+    expect(rule).toMatchObject({ op: 'onOrBefore', from: '1908-10-22', to: '2008-10-22' });
+    expect(ruleAccepts(rule, '1983-05-10')).toBe(true);
+    expect(ruleAccepts(rule, '2008-10-22')).toBe(true);
+    expect(ruleAccepts(rule, '2008-10-23')).toBe(false);
+    expect(describeRule('Birth date', rule)).toBe('Birth date: at least 18 years old (born on or before 22/10/2008)');
+  });
+
+  it('turns "under 18" into births after the cutoff, up to today', () => {
+    const rule = agePresetRule('ageUnder', ON, 18);
+    expect(rule).toMatchObject({ op: 'between', from: '2008-10-23', to: ON });
+    expect(ruleAccepts(rule, '1983-05-10')).toBe(false);
+    expect(describeRule('Birth date', rule)).toBe('Birth date: under 18 years old (born after 22/10/2008)');
+  });
+
+  it('keeps a published age preset only if it rebuilds the same range', () => {
+    const rule = agePresetRule('ageAtLeast', ON, 18);
+    expect(parseRule(JSON.parse(JSON.stringify(rule)))).toEqual(rule);
+    const lying = { ...rule, preset: { kind: 'ageAtLeast', asOf: ON, years: 21 } };
+    expect(parseRule(lying)).toEqual({ op: 'onOrBefore', type: 'date', from: rule.from, to: rule.to });
   });
 });
 

@@ -4,8 +4,11 @@ import {
   DATE_SPAN_AFTER_YEARS,
   DATE_SPAN_BEFORE_YEARS,
   DEFAULT_NUMBER_SPAN,
+  MAX_AGE_YEARS,
   VALIDITY_PERIOD_MONTHS,
   addYears,
+  ageCutoffText,
+  agePresetRule,
   describePeriod,
   canonicalValue,
   fieldType,
@@ -29,7 +32,6 @@ const OPS = {
     { value: "oneOf", label: "is one of" },
   ],
   date: [
-    { value: "age", label: "is at least N years ago" },
     { value: "onOrBefore", label: "is on or before" },
     { value: "onOrAfter", label: "is on or after" },
     { value: "between", label: "is between" },
@@ -45,8 +47,20 @@ const VALIDITY_OPS = [
   { value: `${PRESET_PREFIX}expiresWithin`, label: "expires within…" },
   { value: `${PRESET_PREFIX}validFor`, label: "is valid for at least…" },
 ];
+// Any other date (a date of birth…) gets age questions first: the asker types an age, the form
+// works out the birth date it turns on (attribute-types.ts#agePresetRule).
+const AGE_OPS = [
+  { value: "ageAtLeast", text: (label) => `${label}: at least N years old` },
+  { value: "ageUnder", text: (label) => `${label}: under N years old` },
+];
+const isAgeOp = (op) => op === "ageAtLeast" || op === "ageUnder";
 const isValidUntilField = (field) => field?.auto === "validUntil";
-const opsFor = (field) => (isValidUntilField(field) ? [...VALIDITY_OPS, ...OPS.date] : OPS[fieldType(field)]);
+const opsFor = (field) =>
+  isValidUntilField(field)
+    ? [...VALIDITY_OPS, ...OPS.date]
+    : fieldType(field) === "date"
+      ? [...AGE_OPS, ...OPS.date]
+      : OPS[fieldType(field)];
 
 const toInt = (raw) => (/^[+-]?\d+$/.test(String(raw).trim()) ? Number(String(raw).trim()) : NaN);
 
@@ -61,7 +75,7 @@ export default function QuestionBuilder({ field, onChange }) {
   const presetKind = op.startsWith(PRESET_PREFIX) ? op.slice(PRESET_PREFIX.length) : null;
   const [values, setValues] = useState(["", ""]); // oneOf (text/number)
   const [picked, setPicked] = useState([]); // oneOf (list)
-  const [a, setA] = useState(""); // number: value / from · date: date / from · age: years
+  const [a, setA] = useState(""); // number: value / from · date: date / from · age: years old
   const [b, setB] = useState(""); // number: to · date: to
   const [bound, setBound] = useState(""); // the open end of a one-sided range
 
@@ -83,8 +97,6 @@ export default function QuestionBuilder({ field, onChange }) {
       if (op === "lte") return field.min !== undefined ? String(field.min) : Number.isNaN(n) ? "" : String(n - DEFAULT_NUMBER_SPAN);
     }
     if (type === "date") {
-      const years = toInt(a);
-      if (op === "age") return Number.isNaN(years) ? "" : addYears(todayIso(), -years - DATE_SPAN_BEFORE_YEARS);
       if (op === "onOrBefore" && a) return addYears(a, -DATE_SPAN_BEFORE_YEARS);
       if (op === "onOrAfter" && a) return addYears(a, DATE_SPAN_AFTER_YEARS);
     }
@@ -92,7 +104,10 @@ export default function QuestionBuilder({ field, onChange }) {
   }, [type, op, a, field]);
   const effectiveBound = bound || defaultBound;
   const oneSided =
-    !presetKind && ((type === "number" && (op === "gte" || op === "lte")) || (type === "date" && op !== "between"));
+    !presetKind &&
+    ((type === "number" && (op === "gte" || op === "lte")) || (type === "date" && (op === "onOrBefore" || op === "onOrAfter")));
+  const ageYears = isAgeOp(op) ? toInt(a) : NaN;
+  const ageValid = !Number.isNaN(ageYears) && ageYears >= 1 && ageYears <= MAX_AGE_YEARS;
 
   const { rule, error } = useMemo(() => {
     try {
@@ -118,10 +133,10 @@ export default function QuestionBuilder({ field, onChange }) {
               ? { op, type, min: second, max: first }
               : { op, type, min: first, max: second };
       } else {
-        if (op === "age") {
-          const years = toInt(a);
-          if (Number.isNaN(years) || years < 0 || !effectiveBound) return { rule: null, error: null };
-          built = { op: "onOrBefore", type, from: effectiveBound, to: addYears(todayIso(), -years) };
+        if (isAgeOp(op)) {
+          if (!a.trim()) return { rule: null, error: null };
+          if (!ageValid) return { rule: null, error: `Enter an age from 1 to ${MAX_AGE_YEARS}.` };
+          built = agePresetRule(op, todayIso(), ageYears);
         } else {
           if (!a || !(op === "between" ? b : effectiveBound)) return { rule: null, error: null };
           built =
@@ -137,14 +152,16 @@ export default function QuestionBuilder({ field, onChange }) {
     } catch (err) {
       return { rule: null, error: err.message };
     }
-  }, [op, presetKind, months, type, field, values, picked, a, b, effectiveBound]);
+  }, [op, presetKind, months, type, field, values, picked, a, b, effectiveBound, ageValid, ageYears]);
 
   useEffect(() => {
     onChange(rule, error);
   }, [rule, error, onChange]);
 
   const size = rule ? ruleSize(rule) : 0;
-  const inputType = type === "date" && op !== "age" ? "date" : type === "number" || op === "age" ? "number" : "text";
+  // A range that lets a single value through asks for the exact value (an edited far end can do it).
+  const exactOnly = rule && rule.op !== "oneOf" && rule.op !== "identity" && size === 1;
+  const inputType = isAgeOp(op) ? "number" : type === "date" ? "date" : type === "number" ? "number" : "text";
 
   return (
     <>
@@ -154,10 +171,15 @@ export default function QuestionBuilder({ field, onChange }) {
           <SelectDropdown
             id="questionOp"
             value={op}
-            onChange={setOp}
+            onChange={(next) => {
+              if (isAgeOp(next) !== isAgeOp(op)) setA(""); // an age and a date don't carry over
+              setOp(next);
+            }}
             options={ops.map((option) => ({
               value: option.value,
-              label: `${option.value.startsWith(PRESET_PREFIX) ? "The credential" : field.label} ${option.label}`,
+              label: option.text
+                ? option.text(field.label)
+                : `${option.value.startsWith(PRESET_PREFIX) ? "The credential" : field.label} ${option.label}`,
             }))}
           />
         </div>
@@ -239,12 +261,35 @@ export default function QuestionBuilder({ field, onChange }) {
         </div>
       )}
 
-      {op !== "oneOf" && !presetKind && (
+      {isAgeOp(op) && (
+        <div className="col-12">
+          <label className="form-label" htmlFor="questionAge">
+            {op === "ageAtLeast" ? "At least this age (years)" : "Under this age (years)"}
+          </label>
+          <input
+            id="questionAge"
+            type="number"
+            min="1"
+            max={MAX_AGE_YEARS}
+            className="form-control"
+            placeholder="e.g. 18"
+            value={a}
+            onChange={(e) => setA(e.target.value)}
+          />
+          <small className="form-text text-muted d-block">
+            {ageValid
+              ? `Counted from today: ${ageCutoffText(op, todayIso(), ageYears)}. The holder proves it without revealing the date.`
+              : "Counted from today. The holder proves it without revealing the date."}
+          </small>
+        </div>
+      )}
+
+      {op !== "oneOf" && !presetKind && !isAgeOp(op) && (
         <div className="col-12">
           <div className="d-flex" style={{ gap: "8px" }}>
             <div className="flex-grow-1">
               <label className="form-label" htmlFor="questionA">
-                {op === "age" ? "Years" : op === "between" ? "From" : "Value"}
+                {op === "between" ? "From" : "Value"}
               </label>
               <input
                 id="questionA"
@@ -270,7 +315,7 @@ export default function QuestionBuilder({ field, onChange }) {
           {oneSided && (
             <div className="mt-2">
               <label className="form-label small text-muted" htmlFor="questionBound">
-                {op === "gte" || op === "onOrAfter" ? "Up to" : "From"}
+                {op === "gte" ? "Up to" : op === "lte" ? "From" : op === "onOrAfter" ? "No later than" : "No earlier than"}
                 {type === "number" &&
                   ((op === "gte" && field.max !== undefined) || (op === "lte" && field.min !== undefined)) &&
                   " (the field's own limit)"}
@@ -292,8 +337,10 @@ export default function QuestionBuilder({ field, onChange }) {
           {error ? (
             <small className="form-text text-danger d-block">{error}</small>
           ) : (
-            <small className="form-text text-muted d-block">
-              Accepts {size.toLocaleString()} value{size === 1 ? "" : "s"}.
+            <small className={`form-text d-block ${exactOnly ? "text-warning" : "text-muted"}`}>
+              {exactOnly
+                ? "Only one value is accepted, so this asks for the exact value. Check both ends of the range."
+                : `Accepts ${size.toLocaleString()} value${size === 1 ? "" : "s"}.`}
               {size > SLOW_SET_SIZE && " Holders' browsers take a few seconds to prepare a proof for it."}
             </small>
           )}

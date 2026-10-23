@@ -215,7 +215,7 @@ describe('HolderProofs drawer view', () => {
 
   it('shows a range question in words', async () => {
     listAnswerableRequests.mockResolvedValue([
-      credentialItem('33'.repeat(32), [condition(0, 'Age', { op: 'gte', type: 'number', min: 18, max: 150 })]),
+      credentialItem('33'.repeat(32), [condition(0, 'Age', { op: 'gte', type: 'number', min: 18, max: 218 })]),
     ]);
     valueQualifies.mockReturnValue(true);
     renderView('detail');

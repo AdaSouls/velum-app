@@ -13,11 +13,12 @@ jest.mock('../../midnight/proof-transcript', () => ({
 jest.mock('../../midnight/indexer.service', () => ({
   getEvent: jest.fn(),
   getToken: jest.fn(),
+  getTokensByEvent: jest.fn(),
 }));
 jest.mock('../../jsx/hooks/useEventMetadata', () => ({ fetchMetadata: jest.fn() }));
 
 const { decodeProofDetails } = jest.requireMock('../../midnight/proof-transcript');
-const { getEvent, getToken } = jest.requireMock('../../midnight/indexer.service');
+const { getEvent, getToken, getTokensByEvent } = jest.requireMock('../../midnight/indexer.service');
 const { fetchMetadata } = jest.requireMock('../../jsx/hooks/useEventMetadata');
 const ORGANIZER = 'f0'.repeat(32);
 const EVENT = '4d'.repeat(32);
@@ -198,6 +199,41 @@ describe('VerifyProof page', () => {
     expect(screen.getByText('Private detail proof')).toBeInTheDocument();
     expect(screen.getByText(/the holder it was addressed to/i)).toBeInTheDocument();
     expect(screen.queryByText(/identity proof missing/i)).not.toBeInTheDocument();
+  });
+
+  it('finds the credential a private-detail proof came from and flags it revoked', async () => {
+    const HOLDER = 'c3'.repeat(32);
+    graphqlReturns([
+      {
+        hash: TX,
+        raw: 'ab',
+        block: { height: 100, timestamp: 1790284776000 },
+        transactionResult: { status: 'SUCCESS' },
+        contractActions: [{ __typename: 'ContractCall', address: CONTRACT, entryPoint: 'proveCredentialAttributes' }],
+      },
+    ]);
+    decodeProofDetails.mockResolvedValue({
+      requestId: 'a1'.repeat(32),
+      verifierPk: ORGANIZER,
+      eventId: EVENT,
+      fieldId: '01'.repeat(32),
+      setRoot: '0'.repeat(64),
+      recipientPk: HOLDER,
+      tokenId: null,
+      conditions: [{ slot: 0, fieldId: '01'.repeat(32), setRoot: '0'.repeat(64) }],
+    });
+    getEvent.mockResolvedValue({ eventId: EVENT, issuerPk: ORGANIZER, metadataURI: null });
+    getTokensByEvent.mockResolvedValue([
+      { tokenId: 1, ownerPk: 'dd'.repeat(32), isBurned: false, mintedBlock: 10, burnedBlock: null },
+      { tokenId: 2, ownerPk: HOLDER, isBurned: true, mintedBlock: 20, burnedBlock: 150 },
+      { tokenId: 5, ownerPk: HOLDER, isBurned: false, mintedBlock: 150, burnedBlock: null, replacesTokenId: 2 },
+    ]);
+    renderAt(TX);
+
+    expect(await screen.findByText(/revoked since block 150/i)).toBeInTheDocument();
+    expect(screen.getByText('Credential revoked')).toBeInTheDocument();
+    expect(screen.getByText(/re-issued as #5: ask for a new proof/i)).toBeInTheDocument();
+    expect(getTokensByEvent).toHaveBeenCalledWith(EVENT);
   });
 
   it('says when the transaction does not exist', async () => {
